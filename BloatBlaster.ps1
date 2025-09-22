@@ -8,131 +8,7 @@ param (
     [String]$OverrideWithCustomField
 )
 
-$global:ExitCode = 0
-
-function Disable-NonMicrosoftStartupApps {
-    # # --- REMOVE UNNECESSARY STARTUP APPS ---
-#     Write-Host "`nDisabling non-Microsoft startup applications..."
-#     try {
-#         Get-CimInstance -ClassName Win32_StartupCommand | Where-Object {
-#             $_.Command -notmatch "Microsoft|Windows Defender|SecurityHealth"
-#         } | ForEach-Object {
-#             Write-Host "Disabling: $($_.Name)"
-#             $null = Disable-ScheduledTask -TaskName $_.Name -ErrorAction SilentlyContinue
-#         }
-#     } catch {
-#         Write-Host "[Warning] Could not disable all startup tasks: $($_.Exception.Message)"
-#     }
-
-
-    Write-Host "`nDisabling non-Microsoft startup apps..."
-
-    # Registry locations
-    $runKeys = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
-                "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
-
-    foreach ($key in $runKeys) {
-        if (Test-Path $key) {
-            Get-ItemProperty -Path $key | ForEach-Object {
-                foreach ($property in $_.PSObject.Properties) {
-                    $name = $property.Name
-                    $command = $property.Value
-                    if ($command -notmatch "Microsoft|Defender|SecurityHealth") {
-                        Write-Host "Removing registry startup item: $name"
-                        Remove-ItemProperty -Path $key -Name $name -ErrorAction SilentlyContinue
-                    }
-                }
-            }
-        }
-    }
-
-    # Startup folder paths
-    $startupPaths = @(
-        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup",
-        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-    )
-
-    foreach ($path in $startupPaths) {
-        if (Test-Path $path) {
-            Get-ChildItem -Path $path -Filter *.lnk | ForEach-Object {
-                if ($_.Name -notmatch "Microsoft|Defender|SecurityHealth") {
-                    Write-Host "Removing startup shortcut: $($_.Name)"
-                    Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
-                }
-            }
-        }
-    }
-}
-
-    function Reset-TaskbarPins 
-{
-    Write-Host "`nResetting taskbar to only include File Explorer and Firefox..."
-
-    # Kill Explorer
-    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-
-    # Remove pinned items
-    $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-    if (Test-Path $taskbarPath) 
-    {
-        Remove-Item "$taskbarPath\*" -Force -ErrorAction SilentlyContinue
-    }
-
-    Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
-
-    # Restart Explorer
-    Start-Process explorer.exe
-    Start-Sleep -Seconds 5
-
-    # Pin File Explorer
-    $explorerPath = "C:\Windows\explorer.exe"
-    $shell = New-Object -ComObject Shell.Application
-    $folder = $shell.Namespace((Split-Path $explorerPath))
-    $item = $folder.ParseName((Split-Path $explorerPath -Leaf))
-    $item.InvokeVerb("Pin to Tas&kbar")
-    Write-Host "Pinned File Explorer."
-
-    # Pin Firefox
-    $firefoxPath = "${env:ProgramFiles}\Mozilla Firefox\firefox.exe"
-    if (Test-Path $firefoxPath) 
-    {
-        $folder = $shell.Namespace((Split-Path $firefoxPath))
-        $item = $folder.ParseName((Split-Path $firefoxPath -Leaf))
-        $item.InvokeVerb("Pin to Tas&kbar")
-        Write-Host "Pinned Firefox."
-    } 
-    else 
-    {
-        Write-Warning "Firefox is not installed at the expected path."
-    }
-
-    # Unpin Teams specifically after File Explorer restarts 
-    Start-Sleep -Seconds 10  # Give Explorer time to fully restart
-    $teamsShortcut = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Teams.lnk"
-
-    if (Test-Path $teamsShortcut) 
-    {
-        Remove-Item $teamsShortcut -Force -ErrorAction SilentlyContinue
-        Write-Host "Teams was pinned — removing shortcut."
-    }
-
-        
-    try 
-    {
-        $TaskBarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-        if (Test-Path $TaskBarPath) 
-        {
-            Remove-Item "$TaskBarPath\*" -Force -ErrorAction SilentlyContinue
-            Write-Host "Pinned taskbar items removed. Restart Explorer for full effect."
-        }
-    } 
-    catch 
-    {
-        Write-Host "[Warning] Could not clear pinned taskbar icons: $($_.Exception.Message)"
-    }
-}
-
-function beginning {
+begin {
     # Replace parameters with dynamic script variables.
     if ($env:appsToRemove -and $env:appsToRemove -notlike "null") { $AppsToRemove = $env:appsToRemove }
     if ($env:overrideWithCustomFieldName -and $env:overrideWithCustomFieldName -notlike "null") { $OverrideWithCustomField = $env:overrideWithCustomFieldName }
@@ -159,48 +35,41 @@ function beginning {
         $NinjaPropertyValue
     }
 
-    if ($OverrideWithCustomField) 
-    {
+    if ($OverrideWithCustomField) {
         Write-Host "Attempting to retrieve uninstall list from '$OverrideWithCustomField'."
-        try 
-        {
+        try {
             $AppsToRemove = Get-NinjaProperty -Name $OverrideWithCustomField -ErrorAction Stop
         }
-        catch 
-        {
+        catch {
             # If we ran into some sort of error we'll output it here.
-            Write-Host "Error $($_.Exception.Message)"
+            Write-Host "[Error] $($_.Exception.Message)"
             exit 1
         }
     }
 
     # Check if apps to remove are specified; otherwise, list all Appx packages and exit
-    if (!$AppsToRemove) 
-    {
-        Write-Host "Error Nothing given to remove? Please specify one of the below packages."
+    if (!$AppsToRemove) {
+        Write-Host "[Error] Nothing given to remove? Please specify one of the below packages."
         Get-AppxPackage -AllUsers | Select-Object Name | Sort-Object Name | Out-String | Write-Host
         exit 1
     }
 
     # Regex to detect invalid characters in Appx package names
-    $InvalidCharacters = '[#!@&$)(<>?|:;\/{}^%`"\]+'
+    $InvalidCharacters = "[#!@&$)(<>?|:;\/{}^%`"']+"
 
     # Process each app name after splitting the input string
-    if ($AppsToRemove -match ",") 
-    {
-        $AppsToRemove -split ',' | ForEach-Object 
-        {
+    if ($AppsToRemove -match ",") {
+        $AppsToRemove -split ',' | ForEach-Object {
             $App = $_.Trim()
-            if ($App -match '^[-.]' -or $App -match '\.\.|--' -or $App -match '[-.]$' -or $App -match "\s" -or $App -match $InvalidCharacters) 
-            {
-                Write-Host "[Error] Invalid character in '$App'. Appx package names cannot contain '$InvalidCharcters', start with '.-', contain a space, or have consecutive '.' or '-' characters."
-                $global:ExitCode = 1
+            if ($App -match '^[-.]' -or $App -match '\.\.|--' -or $App -match '[-.]$' -or $App -match "\s" -or $App -match $InvalidCharacters) {
+                Write-Host "[Error] Invalid character in '$App'. Appx package names cannot contain '#!@&$)(<>?|:;\/{}^%`"'', start with '.-', contain a space, or have consecutive '.' or '-' characters."
+                $ExitCode = 1
                 return
             }
 
             if ($App.Length -ge 50) {
                 Write-Host "[Error] Appx package name of '$App' is invalid Appx package names must be less than 50 characters."
-                $global:ExitCode = 1
+                $ExitCode = 1
                 return
             }
 
@@ -210,7 +79,7 @@ function beginning {
     else {
         $AppsToRemove = $AppsToRemove.Trim()
         if ($AppsToRemove -match '^[-.]' -or $AppsToRemove -match '\.\.|--' -or $AppsToRemove -match '[-.]$' -or $AppsToRemove -match "\s" -or $AppsToRemove -match $InvalidCharacters) {
-            Write-Host "[Error] Invalid character in '$AppsToRemove'. AppxPackage names cannot contain '#!@&$)(<>?|:;\/{}^%`"', start with '.-', contain a space, or have consecutive '.' or '-' characters."
+            Write-Host "[Error] Invalid character in '$AppsToRemove'. AppxPackage names cannot contain '#!@&$)(<>?|:;\/{}^%`"'', start with '.-', contain a space, or have consecutive '.' or '-' characters."
             Get-AppxPackage -AllUsers | Select-Object Name | Sort-Object Name | Out-String | Write-Host
             exit 1
         }
@@ -238,24 +107,58 @@ function beginning {
         $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
     }
 
-    if (!$global:ExitCode) {
-        $global:ExitCode = 0
+    if (!$ExitCode) {
+        $ExitCode = 0
     }
 }
 
-function isAdmin {
-        # Check for Administrator privileges before attempting to remove any packages
-        if (!(Test-IsElevated)) {
-            Write-Host -Object "[Error] Access Denied. Please run with Administrator privileges."
-            exit 1
+process {
+    # Check for Administrator privileges before attempting to remove any packages
+    if (!(Test-IsElevated)) {
+        Write-Host -Object "[Error] Access Denied. Please run with Administrator privileges."
+        exit 1
+    }
+# --- REMOVE UNNECESSARY STARTUP APPS ---
+    Write-Host "`nDisabling non-Microsoft startup applications..."
+    try {
+        Get-CimInstance -ClassName Win32_StartupCommand | Where-Object {
+            $_.Command -notmatch "Microsoft|Windows Defender|SecurityHealth"
+        } | ForEach-Object {
+            Write-Host "Disabling: $($_.Name)"
+            $null = Disable-ScheduledTask -TaskName $_.Name -ErrorAction SilentlyContinue
         }
-}
+    } catch {
+        Write-Host "[Warning] Could not disable all startup tasks: $($_.Exception.Message)"
+    }
 
-function removeBloat 
-{
+# --- UNPIN TASKBAR ICONS ---
+        Write-Host "`nRemoving all pinned taskbar icons..."
+    # Stop Explorer
+        Stop-Process -Name explorer -Force
+
+    # Remove the registry value responsible for taskbar pins
+        Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer" -Name "StartPage" -ErrorAction SilentlyContinue
+
+    # Optionally remove IconStreams/PastIconsStream (cache)
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer" -Name "IconStreams" -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer" -Name "PastIconsStream" -ErrorAction SilentlyContinue
+
+    # Restart Explorer
+        Start-Process explorer.exe
+        
+    try {
+        $TaskBarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+        if (Test-Path $TaskBarPath) {
+            Remove-Item "$TaskBarPath\*" -Force -ErrorAction SilentlyContinue
+            Write-Host "Pinned taskbar items removed. Restart Explorer for full effect."
+        }
+    } catch {
+        Write-Host "[Warning] Could not clear pinned taskbar icons: $($_.Exception.Message)"
+    }
+
     # Attempt to remove each specified app
-    foreach ($App in $AppList) 
-    {
+    foreach ($App in $AppList) {
         $AppxPackage = Get-AppxPackage -AllUsers | Where-Object { $_.Name -Like "*$App*" } | Sort-Object Name -Unique
         $ProvisionedPackage = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$App*" } | Sort-Object DisplayName -Unique
         
@@ -269,13 +172,13 @@ function removeBloat
         if ($AppxPackage.Count -gt 1) {
             Write-Host "[Error] Too many Apps were found with the name '$App'. Please re-run with a more specific name."
             Write-Host ($AppxPackage | Select-Object Name | Sort-Object Name | Out-String)
-            $global:ExitCode = 1
+            $ExitCode = 1
             continue
         }
         if ($ProvisionedPackage.Count -gt 1) {
             Write-Host "[Error] Too many Apps were found with the name '$App'. Please re-run with a more specific name."
             Write-Host ($ProvisionedPackage | Select-Object DisplayName | Sort-Object DisplayName | Out-String)
-            $global:ExitCode = 1
+            ExitCode = 1
             continue
         }
 
@@ -283,60 +186,30 @@ function removeBloat
         if ($ProvisionedPackage -and $AppxPackage -and $AppxPackage.Name -ne $ProvisionedPackage.DisplayName) {
             Write-Host "[Error] Too many Apps were found with the name '$App'. Please re-run with a more specific name."
             Write-Host ($ProvisionedPackage | Select-Object DisplayName | Sort-Object DisplayName | Out-String)
-            $global:ExitCode = 1
+            ExitCode = 1
             continue
         }
 
-        try 
-        {
+        try {
             # Remove the provisioning package first.
-            if ($ProvisionedPackage) 
-            {
+            if ($ProvisionedPackage) {
                 Write-Host "`nAttempting to remove provisioning package $($ProvisionedPackage.DisplayName)..."
                 Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$App*" } | Remove-AppxProvisionedPackage -Online -AllUsers | Out-Null
                 Write-Host "Successfully removed provisioning package $($ProvisionedPackage.DisplayName)."
             }
 
             # Remove the installed instances.
-            if ($AppxPackage) 
-            {
+            if ($AppxPackage) {
                 Write-Host "`nAttempting to remove $($AppxPackage.Name)..."
                 Get-AppxPackage -AllUsers | Where-Object { $_.Name -Like "*$App*" } | Remove-AppxPackage -AllUsers
                 Write-Host "Successfully removed $($AppxPackage.Name)."
             }
         }
-        catch 
-        {
-            if ($AppxPackage.Count -gt 1) 
-            {
-                Write-Host "[Error] Too many Apps were found with the name '$App'. Please re-run with a more specific name."
-
-                foreach ($pkg in $AppxPackage) 
-                {
-                    Write-Host " - $($pkg.Name)"
-                }
-
-                $ExitCode = 1
-                continue
-            }
-
-            if ($ProvisionedPackage.Count -gt 1) 
-            {
-                Write-Host "[Error] Too many Provisioned Apps were found with the name '$App'. Please re-run with a more specific name."
-
-                foreach ($pkg in $ProvisionedPackage) 
-                {
-                    Write-Host " - $($pkg.DisplayName)"
-                }
-
-                $ExitCode = 1
-                continue
-            }
+        catch {
+            Write-Host "[Error] $($_.Exception.Message)"
+            $ExitCode = 1
         }
     }
-}
-
-function installApps {
     # Install common applications using winget
     Write-Host "`nStarting software installations via winget..."
 
@@ -354,13 +227,10 @@ function installApps {
         }
         catch {
             Write-Host "[Error] Failed to install $($app.Name): $($_.Exception.Message)"
-            $global:ExitCode = 1
+            $ExitCode = 1
         }
     }
-}
 
-function cleanRestore 
-{
     #Runs Disk Cleanup and Creates a Restore Point
     # Step 1: Set all cleanup options
     #Function: Set all Disk Cleanup options for sageset:1
@@ -394,18 +264,15 @@ function cleanRestore
         # Confirm if System Restore is active
         $restorePointList = Get-ComputerRestorePoint -ErrorAction SilentlyContinue
 
-        if ($restorePointList) 
-        {
+        if ($restorePointList) {
             # Create a restore point
             Checkpoint-Computer -Description "Initial Setup" -RestorePointType "MODIFY_SETTINGS"
             Write-Host "System Restore Point 'Initial Setup' created successfully."
-        } else 
-        {
+        } else {
             Write-Warning "System Restore is not enabled or supported. Restore point not created."
         }
     }
-    catch 
-    {
+    catch {
         Write-Error "An error occurred while creating the restore point: $_"
 
     }
@@ -452,45 +319,33 @@ function cleanRestore
     # Apply the updated plan
     powercfg /setactive $activePlan
     Write-Output "Power plan updated successfully."
-}
 
-function installOffice 
-{
     # Prompt for Office 365 download and install
     $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
 
-    if ($response -match '^[Yy]') 
-    {
+    if ($response -match '^[Yy]') {
         Write-Host "Starting Microsoft 365 download and installation..."
 
-        $officePath = "C:\Installs\Office 365 Business Premium - Offline"
+        # Set the path where setup.exe and configuration.xml are located
+        $officePath = "C:\Installs\Office 365 Business Premium - Offline"  
         Set-Location $officePath
 
-        # Step 1: Download Office
-        Start-Process -FilePath ".\setup.exe" -ArgumentList '/download "General M365 Business.xml" -Wait'
+        # Step 1: Download Office files
+        Start-Process -FilePath ".\setup.exe" -ArgumentList "/download 'General M365 Business.xml'" -Wait
         Write-Host "Download complete."
 
-        if (!(Test-Path "$officePath\Office")) 
-        {
+        # Optional: Check that files were downloaded
+        if (!(Test-Path "$officePath\Office")) {
             Write-Warning "Office files not found. The download might have failed."
             exit 1
         }
 
         # Step 2: Install Office
-        Start-Process -FilePath ".\setup.exe" -ArgumentList '/configure "General M365 Business.xml" -Wait'
+        Start-Process -FilePath ".\setup.exe" -ArgumentList "/configure 'General M365 Business.xml'" -Wait
         Write-Host "Office installation completed."
-    } 
-    else 
-    {
+    }
+    else {
         Write-Host "Installation cancelled by user."
     }
 }
-
-beginning
-isAdmin
-installApps
-removeBloat
-Disable-NonMicrosoftStartupApps
-Reset-TaskbarPins
-cleanRestore
-installOffice
+end {}
