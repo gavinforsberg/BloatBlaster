@@ -12,13 +12,16 @@ $global:ExitCode = 0
 $AppList  = New-Object System.Collections.Generic.List[string]
 
 # Tests if the user is running with elevated/admin privileges
-function Test-IsElevated {
+function Test-IsElevated 
+{
     $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $p  = New-Object System.Security.Principal.WindowsPrincipal($id)
     return $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
-function Assert-Admin {
-    if (-not (Test-IsElevated)) {
+function Assert-Admin 
+{
+    if (-not (Test-IsElevated)) 
+    {
         Write-Error "Access Denied. Please run with Administrator privileges."
         exit 1
     }
@@ -38,7 +41,7 @@ function setTimeZone
     else { Write-Warning "Timezone wasn't changed." }
 }
 
-
+# Copilot staying enabled but everything else seemed to work 
 function Disable-NonMicrosoftStartupApps {
     Write-Host "`nDisabling non-Microsoft startup apps..."
 
@@ -90,6 +93,8 @@ function Disable-NonMicrosoftStartupApps {
     }
 }
 
+# SYNTAX ISSUES IDENTIFIED - NEEDS FIXING
+# Function to reset taskbar pins to only File Explorer and Firefox
 function Reset-TaskbarPins 
 {
     Write-Host "`nResetting taskbar to only include File Explorer and Firefox..."
@@ -99,7 +104,8 @@ function Reset-TaskbarPins
 
     # Remove pinned items (shortcuts + registry state)
     $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-    if (Test-Path $taskbarPath) {
+    if (Test-Path $taskbarPath) 
+    {
         Remove-Item "$taskbarPath\*" -Force -ErrorAction SilentlyContinue
     }
     Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
@@ -113,34 +119,39 @@ function Reset-TaskbarPins
     $shell = New-Object -ComObject Shell.Application
     $folder = $shell.Namespace((Split-Path $explorerPath))
     $item = $folder.ParseName((Split-Path $explorerPath -Leaf))
-    $item.InvokeVerb("Pin to Tas&kbar")
+    $item.InvokeVerb("Pin to Taskbar")
     Write-Host "Pinned File Explorer."
 
     # Locate Firefox dynamically
     $firefoxPath = (Get-Command firefox.exe -ErrorAction SilentlyContinue).Source
-    if ($firefoxPath) {
+    if ($firefoxPath) 
+    {
         $folder = $shell.Namespace((Split-Path $firefoxPath))
         $item = $folder.ParseName((Split-Path $firefoxPath -Leaf))
-        $item.InvokeVerb("Pin to Tas&kbar")
+        $item.InvokeVerb("Pin to Taskbar")
         Write-Host "Pinned Firefox."
     }
-    else {
+    else 
+    {
         Write-Warning "Firefox not found — skipping pin."
     }
 
     # Proactively unpin Teams/Edge if they sneak in
     Start-Sleep -Seconds 5
     $unwantedPins = @("Teams.lnk","Microsoft Edge.lnk")
-    foreach ($pin in $unwantedPins) {
+    foreach ($pin in $unwantedPins) 
+    {
         $shortcut = Join-Path $taskbarPath $pin
-        if (Test-Path $shortcut) {
+        if (Test-Path $shortcut) 
+        {
             Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
             Write-Host "Removed unwanted pin: $pin"
         }
     }
 }
 
-
+# This doesn't seem to be doing anything when ran - NEEDS FIXING
+# Function to remove bloatware apps
 function Remove-Bloatware 
 {
     foreach ($App in $AppList) 
@@ -193,7 +204,7 @@ function installApps
             Write-Host "Successfully installed $($app.Name)."
         }
         catch {
-            Write-Host "[Error] Failed to install $($app.Name): $($_.Exception.Message)"
+            Write-Error "Failed to install $($app.Name): $($_.Exception.Message)"
             $global:ExitCode = 1
         }
     }
@@ -305,25 +316,29 @@ function installOffice
         Set-Location $officePath
 
         # Step 1: Download Office
-        Start-Process -FilePath ".\setup.exe" -ArgumentList '/download "General M365 Business.xml" -Wait'
+        Start-Process -FilePath ".\setup.exe" -ArgumentList @('/download', 'General M365 Business.xml') -Wait
         Write-Host "Download complete."
 
-        if (!(Test-Path "$officePath\Office")) 
-        {
-            Write-Warning "Office files not found. The download might have failed."
-            exit 1
-        }
-
         # Step 2: Install Office
-        Start-Process -FilePath ".\setup.exe" -ArgumentList '/configure "General M365 Business.xml" -Wait'
+        Start-Process -FilePath ".\setup.exe" -ArgumentList @('/configure', 'General M365 Business.xml') -Wait
         Write-Host "Office installation completed."
-    } 
+
+        
+        # if (!(Test-Path "$officePath\Office")) 
+        # {
+        #     Write-Warning "Office files not found. The download might have failed."
+        #     exit 1
+        # }
+    
+    }
     else 
     {
-        Write-Host "Installation cancelled by user."
+        Write-Host 'Installation cancelled by user.'
     }
 }
 
+
+# Main script execution
 Assert-Admin 
 installApps
 Remove-Bloatware
@@ -331,5 +346,5 @@ Disable-NonMicrosoftStartupApps
 Reset-TaskbarPins
 cleanRestore
 setTimeZone
-installOffice   
+installOffice  
 exit $global:ExitCode
