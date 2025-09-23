@@ -3,28 +3,42 @@
 [CmdletBinding()]
 param (
     [Parameter()]
-    [String]$AppsToRemove = "Amazon.com.Amazon, AmazonVideo.PrimeVideo, Clipchamp.Clipchamp, Disney.37853FC22B2CE, DropboxInc.Dropbox, Facebook.Facebook, Facebook.InstagramBeta, king.com.BubbleWitch3Saga, king.com.CandyCrushSaga, king.com.CandyCrushSodaSaga, 5A894077.McAfeeSecurity, 4DF9E0F8.Netflix, SpotifyAB.SpotifyMusic, BytedancePte.Ltd.TikTok, 5319275A.WhatsAppDesktop, Microsoft.XboxApp, Microsoft.XboxGameOverlay, Microsoft.XboxGamingOverlay, Microsoft.XboxSpeechToTextOverlay, Microsoft.Xbox.TCUI, Microsoft.XboxIdentityProvider",
+    [String]$AppsToRemove = "Amazon.com.Amazon, AmazonVideo.PrimeVideo, Clipchamp.Clipchamp, Disney.37853FC22B2CE, DropboxInc.Dropbox, Facebook.Facebook, Facebook.InstagramBeta, king.com.BubbleWitch3Saga, king.com.CandyCrushSaga, king.com.CandyCrushSodaSaga, LinkedInforWindows, 5A894077.McAfeeSecurity, 4DF9E0F8.Netflix, SpotifyAB.SpotifyMusic, BytedancePte.Ltd.TikTok, 5319275A.WhatsAppDesktop, Microsoft.XboxApp, Microsoft.XboxGameOverlay, Microsoft.XboxGamingOverlay, Microsoft.XboxSpeechToTextOverlay, Microsoft.Xbox.TCUI, Microsoft.XboxIdentityProvider",
     [Parameter()]
     [String]$OverrideWithCustomField
 )
 
 $global:ExitCode = 0
+$AppList  = New-Object System.Collections.Generic.List[string]
 
-function Disable-NonMicrosoftStartupApps {
-    # # --- REMOVE UNNECESSARY STARTUP APPS ---
-#     Write-Host "`nDisabling non-Microsoft startup applications..."
-#     try {
-#         Get-CimInstance -ClassName Win32_StartupCommand | Where-Object {
-#             $_.Command -notmatch "Microsoft|Windows Defender|SecurityHealth"
-#         } | ForEach-Object {
-#             Write-Host "Disabling: $($_.Name)"
-#             $null = Disable-ScheduledTask -TaskName $_.Name -ErrorAction SilentlyContinue
-#         }
-#     } catch {
-#         Write-Host "[Warning] Could not disable all startup tasks: $($_.Exception.Message)"
-#     }
+function Test-IsElevated {
+    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $p  = New-Object System.Security.Principal.WindowsPrincipal($id)
+    return $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
 
+function Assert-Admin {
+    if (-not (Test-IsElevated)) {
+        Write-Error "Access Denied. Please run with Administrator privileges."
+        exit 1
+    }
+}
 
+function setTimeZone 
+{
+    # Prompt for time zone change 
+    $response = Read-Host "Do you want to set the time zone to Central Standard Time (Y/N)?"
+
+    if ($response -match '^[Yy]') 
+    {
+        # Sets time zone to Central
+        Set-TimeZone -Id "Central Standard Time"
+    } 
+    else { Write-Warning "Timezone wasn't changed." }
+}
+
+function Disable-NonMicrosoftStartupApps 
+{
     Write-Host "`nDisabling non-Microsoft startup apps..."
 
     # Registry locations
@@ -52,10 +66,13 @@ function Disable-NonMicrosoftStartupApps {
         "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
     )
 
-    foreach ($path in $startupPaths) {
-        if (Test-Path $path) {
+    foreach ($path in $startupPaths) 
+    {
+        if (Test-Path $path) 
+        {
             Get-ChildItem -Path $path -Filter *.lnk | ForEach-Object {
-                if ($_.Name -notmatch "Microsoft|Defender|SecurityHealth") {
+                if ($_.Name -notmatch "Microsoft|Defender|SecurityHealth") 
+                {
                     Write-Host "Removing startup shortcut: $($_.Name)"
                     Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
                 }
@@ -64,7 +81,7 @@ function Disable-NonMicrosoftStartupApps {
     }
 }
 
-    function Reset-TaskbarPins 
+function Reset-TaskbarPins 
 {
     Write-Host "`nResetting taskbar to only include File Explorer and Firefox..."
 
@@ -132,211 +149,43 @@ function Disable-NonMicrosoftStartupApps {
     }
 }
 
-function beginning {
-    # Replace parameters with dynamic script variables.
-    if ($env:appsToRemove -and $env:appsToRemove -notlike "null") { $AppsToRemove = $env:appsToRemove }
-    if ($env:overrideWithCustomFieldName -and $env:overrideWithCustomFieldName -notlike "null") { $OverrideWithCustomField = $env:overrideWithCustomFieldName }
-
-    $AppList = New-Object System.Collections.Generic.List[string]
-
-    function Get-NinjaProperty {
-        [CmdletBinding()]
-        Param(
-            [Parameter(Mandatory = $True, ValueFromPipeline = $True)]
-            [String]$Name
-        )
-    
-        # We'll redirect error output to the success stream to make it easier to error out if nothing was found or something else went wrong.
-        $NinjaPropertyValue = Ninja-Property-Get -Name $Name 2>&1
-    
-        # If we received some sort of error it should have an exception property and we'll exit the function with that error information.
-        if ($NinjaPropertyValue.Exception) { throw $NinjaPropertyValue }
-    
-        if (-not $NinjaPropertyValue) {
-            throw [System.NullReferenceException]::New("The Custom Field '$Name' is empty!")
-        }
-    
-        $NinjaPropertyValue
-    }
-
-    if ($OverrideWithCustomField) 
-    {
-        Write-Host "Attempting to retrieve uninstall list from '$OverrideWithCustomField'."
-        try 
-        {
-            $AppsToRemove = Get-NinjaProperty -Name $OverrideWithCustomField -ErrorAction Stop
-        }
-        catch 
-        {
-            # If we ran into some sort of error we'll output it here.
-            Write-Host "Error $($_.Exception.Message)"
-            exit 1
-        }
-    }
-
-    # Check if apps to remove are specified; otherwise, list all Appx packages and exit
-    if (!$AppsToRemove) 
-    {
-        Write-Host "Error Nothing given to remove? Please specify one of the below packages."
-        Get-AppxPackage -AllUsers | Select-Object Name | Sort-Object Name | Out-String | Write-Host
-        exit 1
-    }
-
-    # Regex to detect invalid characters in Appx package names
-    $InvalidCharacters = '[#!@&$)(<>?|:;\/{}^%`"\]+'
-
-    # Process each app name after splitting the input string
-    if ($AppsToRemove -match ",") 
-    {
-        $AppsToRemove -split ',' | ForEach-Object 
-        {
-            $App = $_.Trim()
-            if ($App -match '^[-.]' -or $App -match '\.\.|--' -or $App -match '[-.]$' -or $App -match "\s" -or $App -match $InvalidCharacters) 
-            {
-                Write-Host "[Error] Invalid character in '$App'. Appx package names cannot contain '$InvalidCharcters', start with '.-', contain a space, or have consecutive '.' or '-' characters."
-                $global:ExitCode = 1
-                return
-            }
-
-            if ($App.Length -ge 50) {
-                Write-Host "[Error] Appx package name of '$App' is invalid Appx package names must be less than 50 characters."
-                $global:ExitCode = 1
-                return
-            }
-
-            $AppList.Add($App)
-        }
-    }
-    else {
-        $AppsToRemove = $AppsToRemove.Trim()
-        if ($AppsToRemove -match '^[-.]' -or $AppsToRemove -match '\.\.|--' -or $AppsToRemove -match '[-.]$' -or $AppsToRemove -match "\s" -or $AppsToRemove -match $InvalidCharacters) {
-            Write-Host "[Error] Invalid character in '$AppsToRemove'. AppxPackage names cannot contain '#!@&$)(<>?|:;\/{}^%`"', start with '.-', contain a space, or have consecutive '.' or '-' characters."
-            Get-AppxPackage -AllUsers | Select-Object Name | Sort-Object Name | Out-String | Write-Host
-            exit 1
-        }
-
-        if ($AppsToRemove.Length -ge 50) {
-            Write-Host "[Error] Appx package name of '$AppsToRemove' is invalid Appx package names must be less than 50 characters."
-            Get-AppxPackage -AllUsers | Select-Object Name | Sort-Object Name | Out-String | Write-Host
-            exit 1
-        }
-
-        $AppList.Add($AppsToRemove)
-    }
-
-    # Exit if no valid apps to remove
-    if ($AppList.Count -eq 0) {
-        Write-Host "[Error] No valid apps to remove!"
-        Get-AppxPackage -AllUsers | Select-Object Name | Sort-Object Name | Out-String | Write-Host
-        exit 1
-    }
-
-    # Function to check if the script is running with Administrator privileges
-    function Test-IsElevated {
-        $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-        $p = New-Object System.Security.Principal.WindowsPrincipal($id)
-        $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-    }
-
-    if (!$global:ExitCode) {
-        $global:ExitCode = 0
-    }
-}
-
-function isAdmin {
-        # Check for Administrator privileges before attempting to remove any packages
-        if (!(Test-IsElevated)) {
-            Write-Host -Object "[Error] Access Denied. Please run with Administrator privileges."
-            exit 1
-        }
-}
-
-function removeBloat 
+function Remove-Bloatware 
 {
-    # Attempt to remove each specified app
     foreach ($App in $AppList) 
     {
         $AppxPackage = Get-AppxPackage -AllUsers | Where-Object { $_.Name -Like "*$App*" } | Sort-Object Name -Unique
-        $ProvisionedPackage = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$App*" } | Sort-Object DisplayName -Unique
-        
-        # Warn if the app is not installed
-        if (!$AppxPackage -and !$ProvisionedPackage) {
-            Write-Host "`n[Warn] $App is not installed!"
-            continue
-        }
+        $Provisioned = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$App*" } | Sort-Object DisplayName -Unique
 
-        # Output an error if too many apps were selected for uninstall
-        if ($AppxPackage.Count -gt 1) {
-            Write-Host "[Error] Too many Apps were found with the name '$App'. Please re-run with a more specific name."
-            Write-Host ($AppxPackage | Select-Object Name | Sort-Object Name | Out-String)
-            $global:ExitCode = 1
-            continue
-        }
-        if ($ProvisionedPackage.Count -gt 1) {
-            Write-Host "[Error] Too many Apps were found with the name '$App'. Please re-run with a more specific name."
-            Write-Host ($ProvisionedPackage | Select-Object DisplayName | Sort-Object DisplayName | Out-String)
-            $global:ExitCode = 1
-            continue
-        }
-
-        # Output an error if two different packages got selected.
-        if ($ProvisionedPackage -and $AppxPackage -and $AppxPackage.Name -ne $ProvisionedPackage.DisplayName) {
-            Write-Host "[Error] Too many Apps were found with the name '$App'. Please re-run with a more specific name."
-            Write-Host ($ProvisionedPackage | Select-Object DisplayName | Sort-Object DisplayName | Out-String)
-            $global:ExitCode = 1
+        if (-not $AppxPackage -and -not $Provisioned) 
+        {
+            Write-Warning "$App is not installed."
             continue
         }
 
         try 
         {
-            # Remove the provisioning package first.
-            if ($ProvisionedPackage) 
-            {
-                Write-Host "`nAttempting to remove provisioning package $($ProvisionedPackage.DisplayName)..."
-                Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$App*" } | Remove-AppxProvisionedPackage -Online -AllUsers | Out-Null
-                Write-Host "Successfully removed provisioning package $($ProvisionedPackage.DisplayName)."
+            if ($Provisioned) {
+                Write-Verbose "Removing provisioned package $($Provisioned.DisplayName)..."
+                $Provisioned | Remove-AppxProvisionedPackage -Online -AllUsers | Out-Null
             }
-
-            # Remove the installed instances.
-            if ($AppxPackage) 
-            {
-                Write-Host "`nAttempting to remove $($AppxPackage.Name)..."
-                Get-AppxPackage -AllUsers | Where-Object { $_.Name -Like "*$App*" } | Remove-AppxPackage -AllUsers
-                Write-Host "Successfully removed $($AppxPackage.Name)."
+            if ($AppxPackage) {
+                Write-Verbose "Removing app package $($AppxPackage.Name)..."
+                $AppxPackage | Remove-AppxPackage -AllUsers | Out-Null
             }
+            Write-Host "Removed: $App"
         }
         catch 
         {
-            if ($AppxPackage.Count -gt 1) 
-            {
-                Write-Host "[Error] Too many Apps were found with the name '$App'. Please re-run with a more specific name."
-
-                foreach ($pkg in $AppxPackage) 
-                {
-                    Write-Host " - $($pkg.Name)"
-                }
-
-                $ExitCode = 1
-                continue
-            }
-
-            if ($ProvisionedPackage.Count -gt 1) 
-            {
-                Write-Host "[Error] Too many Provisioned Apps were found with the name '$App'. Please re-run with a more specific name."
-
-                foreach ($pkg in $ProvisionedPackage) 
-                {
-                    Write-Host " - $($pkg.DisplayName)"
-                }
-
-                $ExitCode = 1
-                continue
-            }
+            $App= $($._Exception.Message)
+            Write-Error "Failed to remove $App"
+            $global:ExitCode = 1
         }
     }
 }
 
-function installApps {
+# Function to install Firefox, Chrome, and Adobe Acrobat Reader using winget
+function installApps 
+{
     # Install common applications using winget
     Write-Host "`nStarting software installations via winget..."
 
@@ -359,6 +208,7 @@ function installApps {
     }
 }
 
+# Function to clean up disk and create a restore point
 function cleanRestore 
 {
     #Runs Disk Cleanup and Creates a Restore Point
@@ -409,9 +259,6 @@ function cleanRestore
         Write-Error "An error occurred while creating the restore point: $_"
 
     }
-    # Sets time zone to Central 
-    Set-TimeZone -Id "Central Standard Time"
-
 
     # Sets power plan to high performance, disables Fast Startup, disables sleep, lock screen after 30 minutes
     # Attempts to set lid/power button/sleep button actions to "do nothing", but this funciton is not working as intended. 
@@ -486,11 +333,12 @@ function installOffice
     }
 }
 
-beginning
-isAdmin
+Assert-Admin 
 installApps
 removeBloat
 Disable-NonMicrosoftStartupApps
 Reset-TaskbarPins
 cleanRestore
-installOffice
+setTimeZone
+installOffice   
+exit $global:ExitCode
