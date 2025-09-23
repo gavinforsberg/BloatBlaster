@@ -11,12 +11,12 @@ param (
 $global:ExitCode = 0
 $AppList  = New-Object System.Collections.Generic.List[string]
 
+# Tests if the user is running with elevated/admin privileges
 function Test-IsElevated {
     $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $p  = New-Object System.Security.Principal.WindowsPrincipal($id)
     return $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
-
 function Assert-Admin {
     if (-not (Test-IsElevated)) {
         Write-Error "Access Denied. Please run with Administrator privileges."
@@ -24,6 +24,7 @@ function Assert-Admin {
     }
 }
 
+# Prompts the user and sets timezone to CST
 function setTimeZone 
 {
     # Prompt for time zone change 
@@ -37,42 +38,50 @@ function setTimeZone
     else { Write-Warning "Timezone wasn't changed." }
 }
 
-function Disable-NonMicrosoftStartupApps 
-{
+
+function Disable-NonMicrosoftStartupApps {
     Write-Host "`nDisabling non-Microsoft startup apps..."
 
-    # Registry locations
-    $runKeys = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
-                "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+    $startupKeys = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"
+    )
 
-    foreach ($key in $runKeys) {
+    foreach ($key in $startupKeys) {
         if (Test-Path $key) {
             Get-ItemProperty -Path $key | ForEach-Object {
                 foreach ($property in $_.PSObject.Properties) {
                     $name = $property.Name
                     $command = $property.Value
-                    if ($command -notmatch "Microsoft|Defender|SecurityHealth") {
-                        Write-Host "Removing registry startup item: $name"
-                        Remove-ItemProperty -Path $key -Name $name -ErrorAction SilentlyContinue
+
+                    if ($command -and $command -notmatch "Microsoft|Defender|SecurityHealth") {
+                        Write-Host "Disabling startup item: $name"
+
+                        # Disable in StartupApproved (so it looks disabled in Task Manager)
+                        $approvedKey = $key.Replace("Run","Explorer\StartupApproved\Run")
+                        if (-not (Test-Path $approvedKey)) { New-Item -Path $approvedKey -Force | Out-Null }
+                        $disabledValue = [byte[]](0x03,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00)
+                        Set-ItemProperty -Path $approvedKey -Name $name -Value $disabledValue
+
+                        # Optional: actually remove the Run entry
+                        # Remove-ItemProperty -Path $key -Name $name -ErrorAction SilentlyContinue
                     }
                 }
             }
         }
     }
 
-    # Startup folder paths
+    # Startup folder cleanup
     $startupPaths = @(
         "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup",
         "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
     )
 
-    foreach ($path in $startupPaths) 
-    {
-        if (Test-Path $path) 
-        {
+    foreach ($path in $startupPaths) {
+        if (Test-Path $path) {
             Get-ChildItem -Path $path -Filter *.lnk | ForEach-Object {
-                if ($_.Name -notmatch "Microsoft|Defender|SecurityHealth") 
-                {
+                if ($_.Name -notmatch "Microsoft|Defender|SecurityHealth") {
                     Write-Host "Removing startup shortcut: $($_.Name)"
                     Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
                 }
@@ -88,20 +97,18 @@ function Reset-TaskbarPins
     # Kill Explorer
     Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
 
-    # Remove pinned items
+    # Remove pinned items (shortcuts + registry state)
     $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-    if (Test-Path $taskbarPath) 
-    {
+    if (Test-Path $taskbarPath) {
         Remove-Item "$taskbarPath\*" -Force -ErrorAction SilentlyContinue
     }
-
     Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
 
     # Restart Explorer
     Start-Process explorer.exe
     Start-Sleep -Seconds 5
 
-    # Pin File Explorer
+    # Re-pin File Explorer
     $explorerPath = "C:\Windows\explorer.exe"
     $shell = New-Object -ComObject Shell.Application
     $folder = $shell.Namespace((Split-Path $explorerPath))
@@ -109,45 +116,30 @@ function Reset-TaskbarPins
     $item.InvokeVerb("Pin to Tas&kbar")
     Write-Host "Pinned File Explorer."
 
-    # Pin Firefox
-    $firefoxPath = "${env:ProgramFiles}\Mozilla Firefox\firefox.exe"
-    if (Test-Path $firefoxPath) 
-    {
+    # Locate Firefox dynamically
+    $firefoxPath = (Get-Command firefox.exe -ErrorAction SilentlyContinue).Source
+    if ($firefoxPath) {
         $folder = $shell.Namespace((Split-Path $firefoxPath))
         $item = $folder.ParseName((Split-Path $firefoxPath -Leaf))
         $item.InvokeVerb("Pin to Tas&kbar")
         Write-Host "Pinned Firefox."
-    } 
-    else 
-    {
-        Write-Warning "Firefox is not installed at the expected path."
+    }
+    else {
+        Write-Warning "Firefox not found — skipping pin."
     }
 
-    # Unpin Teams specifically after File Explorer restarts 
-    Start-Sleep -Seconds 10  # Give Explorer time to fully restart
-    $teamsShortcut = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Teams.lnk"
-
-    if (Test-Path $teamsShortcut) 
-    {
-        Remove-Item $teamsShortcut -Force -ErrorAction SilentlyContinue
-        Write-Host "Teams was pinned — removing shortcut."
-    }
-
-        
-    try 
-    {
-        $TaskBarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-        if (Test-Path $TaskBarPath) 
-        {
-            Remove-Item "$TaskBarPath\*" -Force -ErrorAction SilentlyContinue
-            Write-Host "Pinned taskbar items removed. Restart Explorer for full effect."
+    # Proactively unpin Teams/Edge if they sneak in
+    Start-Sleep -Seconds 5
+    $unwantedPins = @("Teams.lnk","Microsoft Edge.lnk")
+    foreach ($pin in $unwantedPins) {
+        $shortcut = Join-Path $taskbarPath $pin
+        if (Test-Path $shortcut) {
+            Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
+            Write-Host "Removed unwanted pin: $pin"
         }
-    } 
-    catch 
-    {
-        Write-Host "[Warning] Could not clear pinned taskbar icons: $($_.Exception.Message)"
     }
 }
+
 
 function Remove-Bloatware 
 {
@@ -176,8 +168,7 @@ function Remove-Bloatware
         }
         catch 
         {
-            $App= $($._Exception.Message)
-            Write-Error "Failed to remove $App"
+            Write-Error "Failed to remove ${App}: $($_.Exception.Message)"
             $global:ExitCode = 1
         }
     }
@@ -335,7 +326,7 @@ function installOffice
 
 Assert-Admin 
 installApps
-removeBloat
+Remove-Bloatware
 Disable-NonMicrosoftStartupApps
 Reset-TaskbarPins
 cleanRestore
