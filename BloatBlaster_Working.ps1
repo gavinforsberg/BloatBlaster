@@ -93,11 +93,10 @@ function Disable-NonMicrosoftStartupApps {
     }
 }
 
-# SYNTAX ISSUES IDENTIFIED - NEEDS FIXING
 # Function to reset taskbar pins to only File Explorer and Firefox
 function Reset-TaskbarPins 
 {
-    Write-Host "`nResetting taskbar to only include File Explorer and Firefox..."
+    Write-Host "`nResetting taskbar..."
 
     # Kill Explorer
     Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
@@ -113,45 +112,6 @@ function Reset-TaskbarPins
     # Restart Explorer
     Start-Process explorer.exe
     Start-Sleep -Seconds 5
-
-    # Re-pin File Explorer
-    $explorerPath = "C:\Windows\explorer.exe"
-    $shell = New-Object -ComObject Shell.Application
-    $folder = $shell.Namespace((Split-Path $explorerPath))
-    $item = $folder.ParseName((Split-Path $explorerPath -Leaf))
-
-    $pinVerb = $item.Verbs() | Where-Object { $_.Name.Replace('&','') -match 'Pin to Taskbar' }
-    if ($pinVerb) {
-        $pinVerb.DoIt()
-        Write-Host "Pinned File Explorer."
-    }
-
-    # Locate Firefox dynamically
-    $firefoxPath = (Get-Command firefox.exe -ErrorAction SilentlyContinue).Source
-    if ($firefoxPath) {
-        $folder = $shell.Namespace((Split-Path $firefoxPath))
-        $item = $folder.ParseName((Split-Path $firefoxPath -Leaf))
-        $pinVerb = $item.Verbs() | Where-Object { $_.Name.Replace('&','') -match 'Pin to Taskbar' }
-        if ($pinVerb) {
-            $pinVerb.DoIt()
-            Write-Host "Pinned Firefox."
-        }
-    } else {
-        Write-Warning "Firefox not found — skipping pin."
-    }
-
-    # Proactively unpin Teams/Edge if they sneak in
-    Start-Sleep -Seconds 5
-    $unwantedPins = @("Teams.lnk","Microsoft Edge.lnk")
-    foreach ($pin in $unwantedPins) 
-    {
-        $shortcut = Join-Path $taskbarPath $pin
-        if (Test-Path $shortcut) 
-        {
-            Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
-            Write-Host "Removed unwanted pin: $pin"
-        }
-    }
 }
 
 # This doesn't seem to be doing anything when ran - NEEDS FIXING
@@ -217,18 +177,12 @@ function installApps
 # Function to clean up disk and create a restore point
 function cleanRestore 
 {
-    #Runs Disk Cleanup and Creates a Restore Point
-    # Step 1: Set all cleanup options
-    #Function: Set all Disk Cleanup options for sageset:1
-    #function Set-DiskCleanupOptions 
-
-    # Step 2: Run Disk Cleanup silently and wait
+    # Run Disk Cleanup silently and wait
     Write-Host "Running Disk Cleanup (silent) and waiting for it to finish..."
     Start-Process cleanmgr.exe -ArgumentList "/sagerun:1" -Wait
     Write-Host "Disk Cleanup completed."
 
-    # Step 3: Create a System Restore Point
-
+    # Create a System Restore Point
     Write-Host "Creating System Restore Point: 'Initial Setup'..."
     try 
     {
@@ -266,7 +220,10 @@ function cleanRestore
 
     }
 
+    # Run the restore point again to ensure it's created
+    Checkpoint-Computer -Description "Initial Setup" -RestorePointType "MODIFY_SETTINGS"
 }
+
 # Function to set power plan to High Performance and adjust settings
 function setPowerPlan
 {
