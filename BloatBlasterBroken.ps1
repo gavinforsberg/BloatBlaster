@@ -119,20 +119,24 @@ function Reset-TaskbarPins
     $shell = New-Object -ComObject Shell.Application
     $folder = $shell.Namespace((Split-Path $explorerPath))
     $item = $folder.ParseName((Split-Path $explorerPath -Leaf))
-    $item.InvokeVerb("Pin to Taskbar")
-    Write-Host "Pinned File Explorer."
+
+    $pinVerb = $item.Verbs() | Where-Object { $_.Name.Replace('&','') -match 'Pin to Taskbar' }
+    if ($pinVerb) {
+        $pinVerb.DoIt()
+        Write-Host "Pinned File Explorer."
+    }
 
     # Locate Firefox dynamically
     $firefoxPath = (Get-Command firefox.exe -ErrorAction SilentlyContinue).Source
-    if ($firefoxPath) 
-    {
+    if ($firefoxPath) {
         $folder = $shell.Namespace((Split-Path $firefoxPath))
         $item = $folder.ParseName((Split-Path $firefoxPath -Leaf))
-        $item.InvokeVerb("Pin to Taskbar")
-        Write-Host "Pinned Firefox."
-    }
-    else 
-    {
+        $pinVerb = $item.Verbs() | Where-Object { $_.Name.Replace('&','') -match 'Pin to Taskbar' }
+        if ($pinVerb) {
+            $pinVerb.DoIt()
+            Write-Host "Pinned Firefox."
+        }
+    } else {
         Write-Warning "Firefox not found — skipping pin."
     }
 
@@ -262,6 +266,10 @@ function cleanRestore
 
     }
 
+}
+# Function to set power plan to High Performance and adjust settings
+function setPowerPlan
+{
     # Sets power plan to high performance, disables Fast Startup, disables sleep, lock screen after 30 minutes
     # Attempts to set lid/power button/sleep button actions to "do nothing", but this funciton is not working as intended. 
     Write-Output "Switching to High performance power plan..."
@@ -345,6 +353,7 @@ Remove-Bloatware
 Disable-NonMicrosoftStartupApps
 Reset-TaskbarPins
 cleanRestore
+setPowerPlan
 setTimeZone
 installOffice  
 exit $global:ExitCode
