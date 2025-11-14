@@ -161,7 +161,15 @@ function installApps
         @{ Name = "Adobe Acrobat Reader DC"; Id = "Adobe.Acrobat.Reader.64-bit" }
     )
 
-    foreach ($app in $AppsToInstall) {
+    $OptionalSoftware = @(
+        @{ Name = "7-Zip"; Id = "7zip.7zip" },
+        @{ Name = "VLC Media Player"; Id = "VideoLAN.VLC" },
+        @{ Name = "Webex"; Id = "Cisco.Webex" },
+        @{ Name = "Zoom"; Id = "Zoom.Zoom" }
+    )
+
+    foreach ($app in $AppsToInstall) 
+    {
         Write-Host "`nAttempting to install $($app.Name)..."
         try {
             winget install --id $($app.Id) --silent --accept-package-agreements --accept-source-agreements
@@ -170,6 +178,27 @@ function installApps
         catch {
             Write-Error "Failed to install $($app.Name): $($_.Exception.Message)"
             $global:ExitCode = 1
+        }
+    }
+
+    foreach ($opt in $OptionalSoftware) 
+    {
+        $answer = Read-Host "`nDo you want to install $($opt.Name) (Y/N)? "
+
+        if ($answer -match '^(Y|y)$') 
+        {
+            try{
+                winget install --id $($opt.Id) --silent --accept-package-agreements --accept-source-agreements
+                Write-Host "Successfully installed $($opt.Name)."
+            }
+            catch {
+                Write-Error "Failed to install $($opt.Name): $($_.Exception.Message)"
+                $global:ExitCode = 1
+            }
+        }
+        else 
+        {
+            Write-Host "Skipping $($opt.displayName)."
         }
     }
 }
