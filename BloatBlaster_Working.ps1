@@ -189,16 +189,16 @@ function installApps
         {
             try{
                 winget install --id $($opt.Id) --silent --accept-package-agreements --accept-source-agreements
-                Write-Host "Successfully installed $($opt.Name)."
+                Write-Host "Successfully installed $($opt.displayName)."
             }
             catch {
-                Write-Error "Failed to install $($opt.Name): $($_.Exception.Message)"
+                Write-Error "Failed to install $($opt.displayName): $($_.Exception.Message)"
                 $global:ExitCode = 1
             }
         }
         else 
         {
-            Write-Host "Skipping $($opt.Name)."
+            Write-Host "Skipping($opt.displayName)."
         }
     }
 }
