@@ -198,7 +198,7 @@ function installApps
         }
         else 
         {
-            Write-Host "Skipping $($opt.displayName)."
+            Write-Host "Skipping $($opt.Name)."
         }
     }
 }
@@ -302,33 +302,55 @@ function installOffice
     # Prompt for Office 365 download and install
     $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
 
-    if ($response -match '^[Yy]') 
+    if($response -notmatch '^(Y|y)') 
     {
-        Write-Host "Starting Microsoft 365 download and installation..."
-
-        $officePath = "C:\Installs\Office 365 Business Premium - Offline"
-        Set-Location $officePath
-
-        # Step 1: Download Office
-        Start-Process -FilePath ".\setup.exe" -ArgumentList @('/download', 'General M365 Business.xml') -Wait
-        Write-Host "Download complete."
-
-        # Step 2: Install Office
-        Start-Process -FilePath ".\setup.exe" -ArgumentList @('/configure', 'General M365 Business.xml') -Wait
-        Write-Host "Office installation completed."
-
-        
-        # if (!(Test-Path "$officePath\Office")) 
-        # {
-        #     Write-Warning "Office files not found. The download might have failed."
-        #     exit 1
-        # }
-    
+        Write-Host "Installation cancelled by user."
+        return
     }
-    else 
-    {
-        Write-Host 'Installation cancelled by user.'
+
+    Write-Host "`nStarting Microsoft 365 download and installation..."
+
+    # Path where Office Deployment Tool and XML live
+    $officePath = "C:\Installs\Office 365 Business Premium - Offline"
+    $setupExe   = Join-Path $officePath "setup.exe"
+    $xmlFile    = Join-Path $officePath "General M365 Business.xml"
+
+    $officePath = "C:\Installs\Office 365 Business Premium - Offline"
+    Set-Location $officePath
+
+        # Validate paths
+    if (!(Test-Path $setupExe)) {
+        Write-Error "setup.exe NOT FOUND at: $setupExe"
+        return
     }
+    if (!(Test-Path $xmlFile)) {
+        Write-Error "XML NOT FOUND at: $xmlFile"
+        return
+    }
+
+    Write-Host "Using XML:`n$xmlFile"
+
+    # Step 1 – Download Office
+    Start-Process -FilePath $setupExe `
+        -ArgumentList "/download `"$xmlFile`"" `
+        -Wait -NoNewWindow
+
+    Write-Host "`nDownload complete."
+
+    # Step 2 – Install Office
+    Start-Process -FilePath $setupExe `
+        -ArgumentList "/configure `"$xmlFile`"" `
+        -Wait -NoNewWindow
+
+    Write-Host "`nOffice installation completed."
+
+    # # Step 1: Download Office
+    # Start-Process -FilePath ".\setup.exe" -ArgumentList @('/download', "General M365 Business.xml") -Wait
+    # Write-Host "Download complete."
+
+    # # Step 2: Install Office
+    # Start-Process -FilePath ".\setup.exe" -ArgumentList @('/configure', "General M365 Business.xml") -Wait
+    # Write-Host "Office installation completed."   
 }
 
 
