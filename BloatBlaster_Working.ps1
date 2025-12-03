@@ -11,6 +11,145 @@ param (
 $global:ExitCode = 0
 $AppList  = New-Object System.Collections.Generic.List[string]
 
+# Parse the AppsToRemove parameter
+if ($OverrideWithCustomField) {
+    $AppsToRemove = $OverrideWithCustomField
+}
+$AppsToRemove.Split(',').Trim() | ForEach-Object { 
+    if ($_) { $AppList.Add($_) }
+}
+
+# Function to ensure winget is installed and working properly
+function Repair-StoreDependencies {
+    Write-Host "Repairing Microsoft Store dependency packages..." -ForegroundColor Yellow
+
+    $frameworks = @(
+        "Microsoft.VCLibs.140.00",
+        "Microsoft.UI.Xaml.2.7",
+        "Microsoft.UI.Xaml.2.8",
+        "Microsoft.NET.Native.Runtime",
+        "Microsoft.NET.Native.Framework",
+        "Microsoft.Services.Store.Engagement"
+    )
+
+    foreach ($fw in $frameworks) {
+        $pkg = Get-AppxPackage -AllUsers | Where-Object { $_.Name -like "$fw*" }
+        if ($pkg) {
+            Add-AppxPackage -Register "$($pkg.InstallLocation)\AppxManifest.xml" -DisableDevelopmentMode -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Host "Store dependency repair complete." -ForegroundColor Green
+}
+
+function Remove-BrokenAppInstaller {
+    Write-Host "Removing broken App Installer..." -ForegroundColor Yellow
+
+    # Remove provisioned package
+    Get-AppXProvisionedPackage -Online |
+        Where-Object { $_.DisplayName -like "Microsoft.DesktopAppInstaller*" } |
+        Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+
+    # Remove installed package (all users)
+    Get-AppxPackage -Name Microsoft.DesktopAppInstaller* -AllUsers |
+        Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+
+    # Delete leftover folder
+    $folder = Join-Path $env:LOCALAPPDATA "Packages"
+    Get-ChildItem $folder -Filter "Microsoft.DesktopAppInstaller_*" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Host "Broken App Installer removed." -ForegroundColor Green
+}
+
+function Install-FreshAppInstaller {
+    Write-Host "Downloading new App Installer..." -ForegroundColor Cyan
+    
+    $url = "https://aka.ms/getwinget"
+    $file = "$env:TEMP\AppInstaller.msixbundle"
+
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $file -ErrorAction Stop
+
+    Write-Host "Installing App Installer..." -ForegroundColor Cyan
+
+    Add-AppxPackage -Path $file -ForceUpdateFromAnyVersion -ErrorAction Stop
+
+    Start-Sleep -Seconds 6
+
+    Write-Host "App Installer installed successfully." -ForegroundColor Green
+}
+
+function Reset-WingetUserData {
+    Write-Host "Resetting Winget LocalState data..." -ForegroundColor Yellow
+
+    $installerFolder = Get-ChildItem "$env:LOCALAPPDATA\Packages" |
+        Where-Object { $_.Name -like "Microsoft.DesktopAppInstaller_*" }
+
+    foreach ($folder in $installerFolder) {
+        $localState = Join-Path $folder.FullName "LocalState"
+        if (Test-Path $localState) {
+            Remove-Item "$localState\*" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Host "Winget LocalState reset." -ForegroundColor Green
+}
+
+function WingetCheckAndRepair {
+
+    Write-Host "`n=== Checking Winget ===" -ForegroundColor Cyan
+
+    $workingWinget = $false
+
+    try {
+        $ver = winget --version 2>$null
+        if ($ver -and $ver -notmatch "0\.0\.0\.0") {
+            Write-Host "Winget is installed and healthy: $ver" -ForegroundColor Green
+            return $true
+        }
+        else {
+            Write-Host "Winget detected but broken ($ver)." -ForegroundColor Yellow
+            $workingWinget = $false
+        }
+    }
+    catch {
+        Write-Host "Winget not working, repairing..." -ForegroundColor Yellow
+        $workingWinget = $false
+    }
+
+    Write-Host "`n=== FULL WINGET REPAIR ===" -ForegroundColor Cyan
+
+    try {
+        Repair-StoreDependencies
+        Remove-BrokenAppInstaller
+        Install-FreshAppInstaller
+        Reset-WingetUserData
+
+        # Test again
+        Start-Sleep -Seconds 4
+        $ver2 = winget --version 2>$null
+
+        if ($ver2 -and $ver2 -notmatch "0\.0\.0\.0") {
+            Write-Host "Winget successfully repaired: $ver2" -ForegroundColor Green
+            return $true
+        }
+        else {
+            Write-Host "Winget still broken after repair." -ForegroundColor Red
+            return $false
+        }
+    }
+    catch {
+        Write-Host "Repair failed: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+if (-not (WingetCheckAndRepair)) {
+    Write-Error "Winget could not be repaired. Cannot continue."
+    exit
+}
+
+
 # Tests if the user is running with elevated/admin privileges
 function Test-IsElevated 
 {
@@ -198,7 +337,7 @@ function installApps
         }
         else 
         {
-            Write-Host "Skipping($opt.displayName)."
+            Write-Host "Skipping$($opt.Name)."
         }
     }
 }
@@ -342,15 +481,7 @@ function installOffice
         -ArgumentList "/configure `"$xmlFile`"" `
         -Wait -NoNewWindow
 
-    Write-Host "`nOffice installation completed."
-
-    # # Step 1: Download Office
-    # Start-Process -FilePath ".\setup.exe" -ArgumentList @('/download', "General M365 Business.xml") -Wait
-    # Write-Host "Download complete."
-
-    # # Step 2: Install Office
-    # Start-Process -FilePath ".\setup.exe" -ArgumentList @('/configure', "General M365 Business.xml") -Wait
-    # Write-Host "Office installation completed."   
+    Write-Host "`nOffice installation completed." 
 }
 
 
