@@ -11,6 +11,18 @@ param (
 $global:ExitCode = 0
 $AppList  = New-Object System.Collections.Generic.List[string]
 
+# Relaunch as 64-bit PowerShell if currently running in 32-bit mode
+if ($PSHOME -like "*SysWOW64*") {
+    Write-Host "Restarting script in 64-bit PowerShell..."
+    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -File $PSCommandPath @args
+    exit
+}
+
+winget features
+$PSHOME
+whoami
+winget features
+
 # Parse the AppsToRemove parameter
 if ($OverrideWithCustomField) {
     $AppsToRemove = $OverrideWithCustomField
