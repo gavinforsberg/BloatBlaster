@@ -39,7 +39,7 @@ function setTimeZone
         $response = Read-Host "Do you want to set the time zone to Central Standard Time (Y/N)?"
     }
 
-    if($response -match '^(Yy)') 
+    if($response -match '^(Y|y)') 
     {
         Write-Host "Setting timezone to Central Standard Time..."
         Set-TimeZone -Id "Central Standard Time"
