@@ -33,18 +33,11 @@ function setTimeZone
     # Prompt for time zone change 
     $response = Read-Host "Do you want to set the time zone to Central Standard Time (Y/N)?"
 
-    while($response -notmatch '^(Y|y|N|n)$') 
+    if ($response -match '^[Yy]') 
     {
-        Write-Host "Invalid response. Please enter Y or N."
-        $response = Read-Host "Do you want to set the time zone to Central Standard Time (Y/N)?"
-    }
-
-    if($response -match '^(Yy)') 
-    {
-        Write-Host "Setting timezone to Central Standard Time..."
+        # Sets time zone to Central
         Set-TimeZone -Id "Central Standard Time"
-        return
-    }
+    } 
     else { Write-Warning "Timezone wasn't changed." }
 }
 
@@ -138,13 +131,11 @@ function Remove-Bloatware
 
         try 
         {
-            if ($Provisioned) 
-            {
+            if ($Provisioned) {
                 Write-Verbose "Removing provisioned package $($Provisioned.DisplayName)..."
                 $Provisioned | Remove-AppxProvisionedPackage -Online -AllUsers | Out-Null
             }
-            if ($AppxPackage) 
-            {
+            if ($AppxPackage) {
                 Write-Verbose "Removing app package $($AppxPackage.Name)..."
                 $AppxPackage | Remove-AppxPackage -AllUsers | Out-Null
             }
@@ -158,90 +149,6 @@ function Remove-Bloatware
     }
 }
 
-Write-Host "Checking if Chrome is already installed..." -ForegroundColor Cyan
-# --- Function: check whether Chrome is actually installed ---
-function Test-ChromeInstalled 
-{
-    $uninstallKeys = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
-    )
-
-    foreach ($key in $uninstallKeys) {
-        if (Test-Path $key) {
-            Get-ChildItem $key | ForEach-Object {
-                $dn = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
-                if ($dn -like "Google Chrome*") { 
-                    return $true
-                }
-            }
-        }
-    }
-
-    return $false
-}
-
-# Function to install Chrome using Winget or MSI fallback
-function Install-Chrome
-{
-    Write-Host "Checking if Chrome is already installed..." -ForegroundColor Cyan
-    $ChromeInstalled = Test-ChromeInstalled
-
-    if ($ChromeInstalled) 
-    {
-        Write-Host "Chrome already installed. Skipping Winget and MSI."
-        return
-    }
-
-    Write-Host "Chrome not installed. Attempting Winget install..." -ForegroundColor Yellow
-
-    # First Winget attempt
-    $ChromeWinget = Start-Process -FilePath "winget" `
-        -ArgumentList "install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements" `
-        -NoNewWindow -PassThru -Wait
-
-    # Winget exit codes Chrome uses incorrectly but still means "Chrome is installed"
-    $ChromeOkExitCodes = @(
-        0,                # success
-        -1978335189,      # Chrome "already installed" bug
-        -1978335159,      # Chrome "already installed but no upgrade" bug
-        -1978335192       # Chrome "no applicable installer" bug
-    )
-
-    if ($ChromeOkExitCodes -contains $ChromeWinget.ExitCode)
-    {
-        if (Test-ChromeInstalled) 
-        {
-            Write-Host "Chrome installed or already present. Winget considered successful." -ForegroundColor Green
-            return
-        }
-    }
-
-    # If winget *really* failed, detect hash mismatch
-    Write-Warning "Winget exited with code $($ChromeWinget.ExitCode). Checking output..."
-
-    $LastWingetOutput = winget install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements 2>&1
-
-    if ($LastWingetOutput -match "hash does not match") 
-    {
-        Write-Warning "Hash mismatch detected. Attempting direct MSI install..."
-
-        $ChromeMSI = "$env:TEMP\ChromeEnterprise.msi"
-
-        Invoke-WebRequest `
-            -Uri "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi" `
-            -OutFile $ChromeMSI `
-            -UseBasicParsing
-
-        Start-Process msiexec.exe -ArgumentList "/i `"$ChromeMSI`" /qn /norestart" -Wait
-
-        if (Test-ChromeInstalled) { Write-Host "Chrome successfully installed via MSI fallback." -ForegroundColor Green }
-        else { Write-Error "Chrome MSI fallback installation failed." }
-    }
-    else { Write-Error "Winget failed, but no hash mismatch detected. Not running MSI fallback." }
-
-}
-
 # Function to install Firefox, Chrome, and Adobe Acrobat Reader using winget
 function installApps 
 {
@@ -253,6 +160,7 @@ function installApps
 
     # Remove corrupted WinGet database + indexes
     Remove-Item "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\*" -Recurse -Force -ErrorAction SilentlyContinue
+
     # Remove legacy WinGet sqlite DB (causes 100% of hash mismatch cases)
     Remove-Item "$env:LOCALAPPDATA\Microsoft\WinGet" -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -265,14 +173,17 @@ function installApps
 
     Write-Host "--- Winget source reset complete ---`n" -ForegroundColor Green
 
-    # Install common applications using winget
+
     Write-Host "`nStarting software installations via winget..."
 
+    # Required apps (always installed)
     $AppsToInstall = @(
+        @{ Name = "Google Chrome"; Id = "Google.Chrome" },
         @{ Name = "Mozilla Firefox"; Id = "Mozilla.Firefox" },
         @{ Name = "Adobe Acrobat Reader DC"; Id = "Adobe.Acrobat.Reader.64-bit" }
     )
 
+    # Optional user-choice apps
     $OptionalSoftware = @(
         @{ Name = "7-Zip"; Id = "7zip.7zip" },
         @{ Name = "VLC Media Player"; Id = "VideoLAN.VLC" },
@@ -280,21 +191,14 @@ function installApps
         @{ Name = "Zoom"; Id = "Zoom.Zoom" }
     )
 
-    # Install Chrome (Winget First → MSI Fallback)
-    Install-Chrome
+    foreach ($app in $AppsToInstall) {
+        Write-Host "`nInstalling REQUIRED app: $($app.Name)..."
 
-    foreach ($app in $AppsToInstall) 
-    {
-        Write-Host "`nAttempting to install $($app.Name)..."
-        try 
-        {
-            winget install --id $($app.Id) --silent --accept-package-agreements --accept-source-agreements
-            Write-Host "Successfully installed $($app.Name)."
-        }
-        catch 
-        {
-            Write-Error "Failed to install $($app.Name): $($_.Exception.Message)"
-            $global:ExitCode = 1
+        $result = Install-WingetPackage -PackageId $app.Id -DisplayName $app.Name
+
+        # Special fallback for Chrome only
+        if ($app.Id -eq "Google.Chrome" -and -not $result) {
+            Install-ChromeFallback
         }
     }
 
@@ -302,30 +206,89 @@ function installApps
     {
         $answer = Read-Host "`nDo you want to install $($opt.Name) (Y/N)?"
 
-        # Validate input
-        while($answer -notmatch '^[YyNn]$') 
+        while($answer -notmatch '^(Y|y|N|n)$') 
         {
-            Write-Host "Invalid response. Please enter Y or N." -ForegroundColor Red
+            Write-Host "Invalid response. Please enter Y or N."
             $answer = Read-Host "`nDo you want to install $($opt.Name) (Y/N)?"
-        }
-
-        # Process valid input
-        if ($answer -match '^[Yy]$') 
-        {
-            try 
+            
+            if ($answer -match '^(Y|y)$') 
             {
-                winget install --id $($opt.Id) --silent --accept-package-agreements --accept-source-agreements
-                Write-Host "Successfully installed $($opt.Name)." -ForegroundColor Green
+                Write-Host "`nInstalling optional app: $($opt.Name)..."
+                Install-WingetPackage -PackageId $opt.Id -DisplayName $opt.Name | Out-Null
             }
-            catch 
-            {
-                Write-Error "Failed to install $($opt.Name): $($_.Exception.Message)"
-                $global:ExitCode = 1
-            }
+            else { Write-Host "Skipping $($opt.Name)." }
         }
-        else { Write-Host "Skipping $($opt.Name)." -ForegroundColor Gray }
     }
 }
+
+function Install-WingetPackage 
+{
+    param
+    (
+        [string]$PackageId,
+        [string]$DisplayName,
+        [int]$MaxRetries = 5
+    )
+
+    Write-Host "`nInstalling $DisplayName..."
+
+    for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) 
+    {
+
+        Write-Host "Attempt $attempt of $MaxRetries..." -ForegroundColor Cyan
+
+        $output = winget install `
+            --id $PackageId `
+            --source winget `
+            --accept-package-agreements `
+            --accept-source-agreements `
+            --force `
+            --disable-interactivity 2>&1
+
+        $exitCode = $LASTEXITCODE
+
+        # Detect HASH MISMATCH
+        if ($output -match "Installer hash does not match") 
+        {
+            Write-Warning "HASH MISMATCH detected for $DisplayName."
+            Write-Host "Waiting 5s before retry..."
+            Start-Sleep 5
+            continue
+        }
+
+        # Normal install success
+        if ($exitCode -eq 0 -and $output -notmatch "No applicable installer") 
+        {
+            Write-Host "$DisplayName installed successfully." -ForegroundColor Green
+            return $true
+        }
+
+        Write-Warning "Install attempt failed (ExitCode=$exitCode)"
+        Write-Host "Output: $output"
+
+        Start-Sleep 3
+    }
+
+    Write-Host "FAILED: $DisplayName could not be installed after $MaxRetries attempts." -ForegroundColor Red
+    return $false
+}
+
+function Install-ChromeFallback 
+{
+    Write-Warning "Winget Chrome install repeatedly failed — using fallback direct MSI."
+
+    $url = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
+    $path = "$env:TEMP\chrome.msi"
+
+    Invoke-WebRequest -Uri $url -OutFile $path -UseBasicParsing
+
+    Start-Process msiexec.exe -ArgumentList "/i `"$path`" /qn" -Wait
+
+    Write-Host "Chrome installed via fallback."
+}
+
+
+
 
 # Function to clean up disk and create a restore point
 function cleanRestore 
@@ -389,9 +352,9 @@ function setPowerPlan
     powercfg.exe -setactive $activePlan
 
     # 1. Set Sleep to Never
-    Write-Output "Setting battery sleep to 30 minutes, AC sleep to never..."
+    Write-Output "Disabling sleep..."
     powercfg.exe /change standby-timeout-ac 0
-    powercfg.exe /change standby-timeout-dc 30
+    powercfg.exe /change standby-timeout-dc 0
 
     # 2. Set Lock Screen after 30 minutes (1800 seconds)
     Write-Output "Set display shutoff to 30 minutes..."
@@ -430,14 +393,14 @@ function installOffice
     {
         Write-Host "Invalid response. Please enter Y or N."
         $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
+        
+        if($response -match '^(N|n)') 
+        {
+            Write-Host "Installation cancelled by user."
+            return
+        }
     }
-
-    if($response -match '^(N|n)') 
-    {
-        Write-Host "Installation cancelled by user."
-        return
-    }
-
+    
     Write-Host "`nStarting Microsoft 365 download and installation..."
 
     # Path where Office Deployment Tool and XML live
@@ -472,12 +435,12 @@ function installOffice
         -ArgumentList "/configure `"$xmlFile`"" `
         -Wait -NoNewWindow
 
-    Write-Host "`nOffice installation completed."
+    Write-Host "`nOffice installation completed." 
 }
 
 
 # Main script execution
-Assert-Admin
+Assert-Admin 
 installApps
 Remove-Bloatware
 Disable-NonMicrosoftStartupApps
