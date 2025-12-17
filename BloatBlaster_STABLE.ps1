@@ -335,7 +335,7 @@ function cleanRestore
 {
     # Run Disk Cleanup silently and wait
     Write-Host "Running Disk Cleanup (silent) and waiting for it to finish..."
-    Start-Process cleanmgr.exe -ArgumentList "/sagerun:1" -Wait
+    Start-Process cleanmgr.exe -ArgumentList "/sagerun:1" -Wait -NoNewWindow
     Write-Host "Disk Cleanup completed."
 
     # Create a System Restore Point
