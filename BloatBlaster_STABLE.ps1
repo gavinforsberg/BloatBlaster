@@ -48,58 +48,6 @@ function setTimeZone
     else { Write-Warning "Timezone wasn't changed." }
 }
 
-# Copilot staying enabled but everything else seemed to work 
-function Disable-NonMicrosoftStartupApps {
-    Write-Host "`nDisabling non-Microsoft startup apps..."
-
-    $startupKeys = @(
-        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
-        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
-        "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"
-    )
-
-    foreach ($key in $startupKeys) {
-        if (Test-Path $key) {
-            Get-ItemProperty -Path $key | ForEach-Object {
-                foreach ($property in $_.PSObject.Properties) {
-                    $name = $property.Name
-                    $command = $property.Value
-
-                    if ($command -and $command -notmatch "Microsoft|Defender|SecurityHealth") {
-                        Write-Host "Disabling startup item: $name"
-
-                        # Disable in StartupApproved (so it looks disabled in Task Manager)
-                        $approvedKey = $key.Replace("Run","Explorer\StartupApproved\Run")
-                        if (-not (Test-Path $approvedKey)) { New-Item -Path $approvedKey -Force | Out-Null }
-                        $disabledValue = [byte[]](0x03,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00)
-                        Set-ItemProperty -Path $approvedKey -Name $name -Value $disabledValue
-
-                        # Optional: actually remove the Run entry
-                        # Remove-ItemProperty -Path $key -Name $name -ErrorAction SilentlyContinue
-                    }
-                }
-            }
-        }
-    }
-
-    # Startup folder cleanup
-    $startupPaths = @(
-        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup",
-        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-    )
-
-    foreach ($path in $startupPaths) {
-        if (Test-Path $path) {
-            Get-ChildItem -Path $path -Filter *.lnk | ForEach-Object {
-                if ($_.Name -notmatch "Microsoft|Defender|SecurityHealth") {
-                    Write-Host "Removing startup shortcut: $($_.Name)"
-                    Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
-                }
-            }
-        }
-    }
-}
-
 # Function to reset taskbar pins to only File Explorer and Firefox
 function Reset-TaskbarPins 
 {
@@ -274,6 +222,7 @@ function installApps
     )
 
     $OptionalSoftware = @(
+        @{ Name = "Lenovo System Update"; Id = "Lenovo.SystemUpdate" },
         @{ Name = "7-Zip"; Id = "7zip.7zip" },
         @{ Name = "VLC Media Player"; Id = "VideoLAN.VLC" },
         @{ Name = "Webex"; Id = "Cisco.Webex" },
@@ -325,6 +274,60 @@ function installApps
         }
         else { Write-Host "Skipping $($opt.Name)." -ForegroundColor Gray }
     }
+}
+
+function installOffice 
+{
+    # Prompt for Office 365 download and install
+    $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
+
+    while($response -notmatch '^(Y|y|N|n)$') 
+    {
+        Write-Host "Invalid response. Please enter Y or N."
+        $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
+    }
+
+    if($response -match '^(N|n)') 
+    {
+        Write-Host "Installation cancelled by user."
+        return
+    }
+
+    Write-Host "`nStarting Microsoft 365 download and installation..."
+
+    # Path where Office Deployment Tool and XML live
+    $officePath = "C:\Installs\Office 365 Business Premium - Offline"
+    $setupExe   = Join-Path $officePath "setup.exe"
+    $xmlFile    = Join-Path $officePath "General M365 Business.xml"
+
+    $officePath = "C:\Installs\Office 365 Business Premium - Offline"
+    Set-Location $officePath
+
+        # Validate paths
+    if (!(Test-Path $setupExe)) {
+        Write-Error "setup.exe NOT FOUND at: $setupExe"
+        return
+    }
+    if (!(Test-Path $xmlFile)) {
+        Write-Error "XML NOT FOUND at: $xmlFile"
+        return
+    }
+
+    Write-Host "Using XML:`n$xmlFile"
+
+    # Step 1 – Download Office
+    Start-Process -FilePath $setupExe `
+        -ArgumentList "/download `"$xmlFile`"" `
+        -Wait -NoNewWindow
+
+    Write-Host "`nDownload complete."
+
+    # Step 2 – Install Office
+    Start-Process -FilePath $setupExe `
+        -ArgumentList "/configure `"$xmlFile`"" `
+        -Wait -NoNewWindow
+
+    Write-Host "`nOffice installation completed."
 }
 
 # Function to clean up disk and create a restore point
@@ -421,58 +424,252 @@ function setPowerPlan
     Write-Output "Power plan updated successfully."
 }
 
-function installOffice 
+# Disable specific startup apps: Teams, Edge, OneDrive, Webex, Copilot
+function Disable-StartupApps 
 {
-    # Prompt for Office 365 download and install
-    $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
-
-    while($response -notmatch '^(Y|y|N|n)$') 
-    {
-        Write-Host "Invalid response. Please enter Y or N."
-        $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
+    Write-Host "`nDisabling specific startup apps (Teams, Edge, OneDrive, Webex, Copilot)..." -ForegroundColor Cyan
+    
+    $appsToDisable = @(
+        @{ Name = "Teams"; Patterns = @("Teams", "ms-teams", "msteams") },
+        @{ Name = "Microsoft Edge"; Patterns = @("MicrosoftEdge", "msedge") },
+        @{ Name = "OneDrive"; Patterns = @("OneDrive") },
+        @{ Name = "Webex"; Patterns = @("Webex", "CiscoWebex") },
+        @{ Name = "Copilot"; Patterns = @("Copilot", "Microsoft.Copilot") }
+    )
+    
+    # Registry locations for startup items
+    $startupKeys = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"
+    )
+    
+    foreach ($app in $appsToDisable) {
+        $foundAndDisabled = $false
+        Write-Host "`n  Processing: $($app.Name)" -ForegroundColor Yellow
+        
+        # Check and REMOVE (not just disable) from registry Run keys
+        foreach ($key in $startupKeys) {
+            if (Test-Path $key) {
+                $properties = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+                if ($properties) {
+                    foreach ($property in $properties.PSObject.Properties) {
+                        $propName = $property.Name
+                        $propValue = $property.Value
+                        
+                        # Skip system properties
+                        if ($propName -in @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) {
+                            continue
+                        }
+                        
+                        # Check if this property matches any of our patterns
+                        foreach ($pattern in $app.Patterns) {
+                            if ($propName -like "*$pattern*" -or $propValue -like "*$pattern*") {
+                                Write-Host "    Found in registry: $propName at $key" -ForegroundColor Magenta
+                                
+                                # First, disable in StartupApproved
+                                $approvedKey = $key.Replace("Run", "Explorer\StartupApproved\Run")
+                                if (-not (Test-Path $approvedKey)) {
+                                    New-Item -Path $approvedKey -Force | Out-Null
+                                }
+                                
+                                try {
+                                    $disabledValue = [byte[]](0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+                                    Set-ItemProperty -Path $approvedKey -Name $propName -Value $disabledValue -ErrorAction Stop
+                                    
+                                    # Then REMOVE the entry entirely
+                                    Remove-ItemProperty -Path $key -Name $propName -ErrorAction Stop
+                                    Write-Host "    Removed: $propName" -ForegroundColor Green
+                                    $foundAndDisabled = $true
+                                }
+                                catch {
+                                    Write-Warning "    Could not remove ($propName): $($_.Exception.Message)"
+                                }
+                                
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        # Check and remove from startup folders
+        $startupPaths = @(
+            "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup",
+            "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+        )
+        
+        foreach ($path in $startupPaths) {
+            if (Test-Path $path) {
+                Get-ChildItem -Path $path -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
+                    foreach ($pattern in $app.Patterns) {
+                        if ($_.Name -like "*$pattern*") {
+                            Write-Host "    Found shortcut: $($_.Name)" -ForegroundColor Magenta
+                            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+                            Write-Host "    Removed: $($_.Name)" -ForegroundColor Green
+                            $foundAndDisabled = $true
+                        }
+                    }
+                }
+            }
+        }
+        
+        # Disable using Task Scheduler (common for OneDrive, Teams)
+        foreach ($pattern in $app.Patterns) {
+            try {
+                $tasks = Get-ScheduledTask -TaskName "*$pattern*" -ErrorAction SilentlyContinue
+                foreach ($task in $tasks) {
+                    if ($task.State -ne "Disabled") {
+                        Disable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop | Out-Null
+                        Write-Host "    Disabled scheduled task: $($task.TaskName)" -ForegroundColor Green
+                        $foundAndDisabled = $true
+                    }
+                }
+            }
+            catch {
+                # Silently continue if no tasks found
+            }
+        }
+        
+        if (-not $foundAndDisabled) {
+            Write-Host "    Not found or already disabled" -ForegroundColor Gray
+        }
     }
-
-    if($response -match '^(N|n)') 
-    {
-        Write-Host "Installation cancelled by user."
-        return
+    
+    # ===== TEAMS SPECIFIC =====
+    Write-Host "`n  Applying comprehensive Teams restrictions..." -ForegroundColor Yellow
+    
+    # Disable Teams auto-start for current user
+    $teamsConfigPath = "$env:APPDATA\Microsoft\Teams\desktop-config.json"
+    if (Test-Path $teamsConfigPath) {
+        try {
+            $teamsConfig = Get-Content $teamsConfigPath -Raw | ConvertFrom-Json
+            $teamsConfig.appPreferenceSettings.openAtLogin = $false
+            $teamsConfig.appPreferenceSettings.runningOnClose = $false
+            $teamsConfig | ConvertTo-Json -Depth 10 | Set-Content $teamsConfigPath
+            Write-Host "    Teams auto-start disabled in config" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "    Could not modify Teams config: $($_.Exception.Message)"
+        }
     }
-
-    Write-Host "`nStarting Microsoft 365 download and installation..."
-
-    # Path where Office Deployment Tool and XML live
-    $officePath = "C:\Installs\Office 365 Business Premium - Offline"
-    $setupExe   = Join-Path $officePath "setup.exe"
-    $xmlFile    = Join-Path $officePath "General M365 Business.xml"
-
-    $officePath = "C:\Installs\Office 365 Business Premium - Offline"
-    Set-Location $officePath
-
-        # Validate paths
-    if (!(Test-Path $setupExe)) {
-        Write-Error "setup.exe NOT FOUND at: $setupExe"
-        return
+    
+    # Remove all Teams startup registry entries (check multiple locations)
+    $teamsStartupLocations = @(
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"; Name = "com.squirrel.Teams.Teams" },
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"; Name = "Teams" },
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; Name = "com.squirrel.Teams.Teams" },
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; Name = "Teams" }
+    )
+    
+    foreach ($location in $teamsStartupLocations) {
+        if (Test-Path $location.Path) {
+            if (Get-ItemProperty -Path $location.Path -Name $location.Name -ErrorAction SilentlyContinue) {
+                Remove-ItemProperty -Path $location.Path -Name $location.Name -ErrorAction SilentlyContinue
+                Write-Host "    Removed Teams from: $($location.Path)\$($location.Name)" -ForegroundColor Green
+            }
+        }
     }
-    if (!(Test-Path $xmlFile)) {
-        Write-Error "XML NOT FOUND at: $xmlFile"
-        return
+    
+    # Disable Teams via Group Policy registry
+    $teamsPolicyKey = "HKCU:\Software\Policies\Microsoft\Office\16.0\common\officeupdate"
+    if (-not (Test-Path $teamsPolicyKey)) {
+        New-Item -Path $teamsPolicyKey -Force | Out-Null
     }
-
-    Write-Host "Using XML:`n$xmlFile"
-
-    # Step 1 – Download Office
-    Start-Process -FilePath $setupExe `
-        -ArgumentList "/download `"$xmlFile`"" `
-        -Wait -NoNewWindow
-
-    Write-Host "`nDownload complete."
-
-    # Step 2 – Install Office
-    Start-Process -FilePath $setupExe `
-        -ArgumentList "/configure `"$xmlFile`"" `
-        -Wait -NoNewWindow
-
-    Write-Host "`nOffice installation completed."
+    Set-ItemProperty -Path $teamsPolicyKey -Name "preventteamsinstall" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+    Write-Host "    Teams prevented via policy registry" -ForegroundColor Green
+    
+    # ===== COPILOT SPECIFIC =====
+    Write-Host "`n  Applying comprehensive Copilot restrictions..." -ForegroundColor Yellow
+    
+    # Disable Copilot via multiple registry locations
+    $copilotKeys = @(
+        @{ Path = "HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot"; Name = "TurnOffWindowsCopilot"; Value = 1 },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"; Name = "TurnOffWindowsCopilot"; Value = 1 },
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name = "ShowCopilotButton"; Value = 0 },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"; Name = "CopilotPageContext"; Value = 0 },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"; Name = "HubsSidebarEnabled"; Value = 0 }
+    )
+    
+    foreach ($key in $copilotKeys) {
+        try {
+            if (-not (Test-Path $key.Path)) {
+                New-Item -Path $key.Path -Force | Out-Null
+            }
+            Set-ItemProperty -Path $key.Path -Name $key.Name -Value $key.Value -Type DWord -ErrorAction Stop
+            Write-Host "    Set $($key.Path)\$($key.Name) = $($key.Value)" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "    Could not set $($key.Path)\$($key.Name): $($_.Exception.Message)"
+        }
+    }
+    
+    # Remove Copilot from startup
+    $copilotStartupLocations = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+    )
+    
+    foreach ($loc in $copilotStartupLocations) {
+        if (Test-Path $loc) {
+            Get-ItemProperty -Path $loc -ErrorAction SilentlyContinue | 
+                ForEach-Object {
+                    $_.PSObject.Properties | Where-Object { 
+                        $_.Name -notmatch "^PS" -and $_.Value -match "Copilot" 
+                    } | ForEach-Object {
+                        Remove-ItemProperty -Path $loc -Name $_.Name -ErrorAction SilentlyContinue
+                        Write-Host "    Removed Copilot from: $loc\$($_.Name)" -ForegroundColor Green
+                    }
+                }
+        }
+    }
+    
+    # ===== ONEDRIVE =====
+    Write-Host "`n  Applying additional OneDrive restrictions..." -ForegroundColor Yellow
+    try {
+        # Remove OneDrive from Run keys
+        $oneDriveRunKeys = @(
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+        )
+        
+        foreach ($key in $oneDriveRunKeys) {
+            if (Test-Path $key) {
+                if (Get-ItemProperty -Path $key -Name "OneDrive" -ErrorAction SilentlyContinue) {
+                    Remove-ItemProperty -Path $key -Name "OneDrive" -ErrorAction SilentlyContinue
+                    Write-Host "    Removed OneDrive from: $key" -ForegroundColor Green
+                }
+            }
+        }
+    }
+    catch {
+        Write-Warning "    Could not disable OneDrive via registry: $($_.Exception.Message)"
+    }
+    
+    # ===== EDGE =====
+    Write-Host "`n  Preventing Microsoft Edge background processes..." -ForegroundColor Yellow
+    try {
+        $edgeKeys = @(
+            @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"; Name = "BackgroundModeEnabled"; Value = 0 },
+            @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"; Name = "StartupBoostEnabled"; Value = 0 },
+            @{ Path = "HKCU:\Software\Policies\Microsoft\Edge"; Name = "BackgroundModeEnabled"; Value = 0 },
+            @{ Path = "HKCU:\Software\Policies\Microsoft\Edge"; Name = "StartupBoostEnabled"; Value = 0 }
+        )
+        
+        foreach ($key in $edgeKeys) {
+            if (-not (Test-Path $key.Path)) {
+                New-Item -Path $key.Path -Force | Out-Null
+            }
+            Set-ItemProperty -Path $key.Path -Name $key.Name -Value $key.Value -Type DWord -ErrorAction Stop
+        }
+        Write-Host "    Edge background mode disabled" -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "    Could not disable Edge background mode: $($_.Exception.Message)"
+    }
+    
+    Write-Host "`nSpecific startup apps disabled successfully." -ForegroundColor Green
 }
 
 
@@ -480,7 +677,7 @@ function installOffice
 Assert-Admin
 installApps
 Remove-Bloatware
-Disable-NonMicrosoftStartupApps
+Disable-StartupApps 
 Reset-TaskbarPins
 cleanRestore
 setPowerPlan
