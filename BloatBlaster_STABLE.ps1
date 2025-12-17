@@ -288,7 +288,7 @@ function installApps
         Write-Host "`nAttempting to install $($app.Name)..."
         try 
         {
-            winget install --id $($app.Id) --silent --accept-package-agreements --accept-source-agreements
+            winget install --exact --id $($app.Id) --silent --accept-package-agreements --accept-source-agreements
             Write-Host "Successfully installed $($app.Name)."
         }
         catch 
@@ -314,7 +314,7 @@ function installApps
         {
             try 
             {
-                winget install --id $($opt.Id) --silent --accept-package-agreements --accept-source-agreements
+                winget install --exact --id $($opt.Id) --silent --accept-package-agreements --accept-source-agreements
                 Write-Host "Successfully installed $($opt.Name)." -ForegroundColor Green
             }
             catch 
