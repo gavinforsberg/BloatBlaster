@@ -410,14 +410,32 @@ function setPowerPlan
     powercfg /setactive $activePlan
     Write-Output "Power configuration complete under High Performance plan."
 
-    # Set lid close/button actions (Not working) 
-    $do_nothing = 0
-    powercfg /SETACVALUEINDEX $activePlan SUB_BUTTONS LIDACTION $do_nothing
-    powercfg /SETDCVALUEINDEX $activePlan SUB_BUTTONS LIDACTION $do_nothing
-    powercfg /SETACVALUEINDEX $activePlan SUB_BUTTONS PBUTTONACTION $do_nothing
-    powercfg /SETDCVALUEINDEX $activePlan SUB_BUTTONS PBUTTONACTION $do_nothing
-    powercfg /SETACVALUEINDEX $activePlan SUB_BUTTONS SBUTTONACTION $do_nothing
-    powercfg /SETDCVALUEINDEX $activePlan SUB_BUTTONS SBUTTONACTION $do_nothing
+    # Modern Standby breaks this:  
+    # Button GUIDs
+    $SUB_BUTTONS   = "4f971e89-eebd-4455-a8de-9e59040e7347"
+    $LIDACTION     = "5ca83367-6e45-459f-a27b-476b1d01c936"
+    $PBUTTONACTION = "7648efa3-dd9c-4e3e-b566-50f929386280"
+    $SBUTTONACTION = "96996bc0-ad50-47ec-923b-6f41874dd9eb"
+
+    $doNothing = 0
+
+    # Lid
+    powercfg /SETACVALUEINDEX $activePlan $SUB_BUTTONS $LIDACTION $doNothing
+    powercfg /SETDCVALUEINDEX $activePlan $SUB_BUTTONS $LIDACTION $doNothing
+
+    # Power button
+    powercfg /SETACVALUEINDEX $activePlan $SUB_BUTTONS $PBUTTONACTION $doNothing
+    powercfg /SETDCVALUEINDEX $activePlan $SUB_BUTTONS $PBUTTONACTION $doNothing
+
+    # Sleep button (FIXED)
+    powercfg /SETACVALUEINDEX $activePlan $SUB_BUTTONS $SBUTTONACTION $doNothing
+    powercfg /SETDCVALUEINDEX $activePlan $SUB_BUTTONS $SBUTTONACTION $doNothing
+
+    # Apply
+    powercfg /SETACTIVE $activePlan
+
+    # Safe verification
+    powercfg /QUERY $activePlan
 
     # Apply the updated plan
     powercfg /setactive $activePlan
