@@ -435,7 +435,7 @@ function setPowerPlan
     powercfg /SETACTIVE $activePlan
 
     # Safe verification
-    powercfg /QUERY $activePlan
+    # powercfg /QUERY $activePlan
 
     # Apply the updated plan
     powercfg /setactive $activePlan
