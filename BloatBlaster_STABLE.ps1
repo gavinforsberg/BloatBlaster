@@ -27,44 +27,10 @@ function Assert-Admin
     }
 }
 
-# --- Function: check whether Chrome is actually installed ---
-function Test-ChromeInstalled 
-{
-    Write-Host "Checking if Chrome is already installed..." -ForegroundColor Cyan
-
-    $uninstallKeys = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
-    )
-
-    foreach ($key in $uninstallKeys) {
-        if (Test-Path $key) {
-            Get-ChildItem $key | ForEach-Object {
-                $dn = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
-                if ($dn -like "Google Chrome*") { 
-                    return $true
-                }
-            }
-        }
-    }
-
-    return $false
-}
-
 # Function to install Chrome using Winget or MSI fallback
 function Install-Chrome
 {
-    $ChromeInstalled = Test-ChromeInstalled
-
-    if ($ChromeInstalled) 
-    {
-        Write-Host "Chrome already installed. Skipping Winget and MSI."
-        return
-    }
-
-    Write-Host "Chrome not installed. Attempting Winget install..." -ForegroundColor Yellow
-
-    # First Winget attempt
+    # Winget attempt
     $ChromeWinget = Start-Process -FilePath "winget" `
         -ArgumentList "install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements" `
         -NoNewWindow -PassThru -Wait
@@ -93,22 +59,13 @@ function Install-Chrome
 
     if ($LastWingetOutput -match "hash does not match") 
     {
-        Write-Warning "Hash mismatch detected. Attempting direct MSI install..."
-
-        $ChromeMSI = "$env:TEMP\ChromeEnterprise.msi"
-
-        Invoke-WebRequest `
-            -Uri "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi" `
-            -OutFile $ChromeMSI `
-            -UseBasicParsing
-
-        Start-Process msiexec.exe -ArgumentList "/i `"$ChromeMSI`" /qn /norestart" -Wait
-
-        if (Test-ChromeInstalled) { Write-Host "Chrome successfully installed via MSI fallback." -ForegroundColor Green }
-        else { Write-Error "Chrome MSI fallback installation failed." }
+        Write-Warning "Hash mismatch detected. Ignoring the hash mismatch and trying again..."
+        winget settings --enable InstallerHashOverride 
+        winget install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements --ignore-security-hash
     }
-    else { Write-Error "Winget failed, but no hash mismatch detected. Not running MSI fallback." }
+    else { Write-Error "Winget failed, but no hash mismatch detected." }
 
+    winget settings --disable InstallerHashOverride 
 }
 
 # Function to install Firefox, Chrome, and Adobe Acrobat Reader using winget
@@ -150,7 +107,7 @@ function installApps
         @{ Name = "Zoom"; Id = "Zoom.Zoom" }
     )
 
-    # Install Chrome (Winget First → MSI Fallback)
+    # Install Chrome (Winget Ignoring Security Hash)
     Install-Chrome
 
     foreach ($app in $AppsToInstall) 
