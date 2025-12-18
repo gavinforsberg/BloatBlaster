@@ -27,89 +27,11 @@ function Assert-Admin
     }
 }
 
-# Prompts the user and sets timezone to CST
-function setTimeZone 
-{
-    # Prompt for time zone change 
-    $response = Read-Host "Do you want to set the time zone to Central Standard Time (Y/N)?"
-
-    while($response -notmatch '^(Y|y|N|n)$') 
-    {
-        Write-Host "Invalid response. Please enter Y or N."
-        $response = Read-Host "Do you want to set the time zone to Central Standard Time (Y/N)?"
-    }
-
-    if($response -match '^(Y|y)') 
-    {
-        Write-Host "Setting timezone to Central Standard Time..."
-        Set-TimeZone -Id "Central Standard Time"
-        return
-    }
-    else { Write-Warning "Timezone wasn't changed." }
-}
-
-# Function to reset taskbar pins to only File Explorer and Firefox
-function Reset-TaskbarPins 
-{
-    Write-Host "`nResetting taskbar..."
-
-    # Kill Explorer
-    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-
-    # Remove pinned items (shortcuts + registry state)
-    $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-    if (Test-Path $taskbarPath) 
-    {
-        Remove-Item "$taskbarPath\*" -Force -ErrorAction SilentlyContinue
-    }
-    Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
-
-    # Restart Explorer
-    Start-Process explorer.exe
-    Start-Sleep -Seconds 5
-}
-
-# This doesn't seem to be doing anything when ran - NEEDS FIXING
-# Function to remove bloatware apps
-function Remove-Bloatware 
-{
-    foreach ($App in $AppList) 
-    {
-        $AppxPackage = Get-AppxPackage -AllUsers | Where-Object { $_.Name -Like "*$App*" } | Sort-Object Name -Unique
-        $Provisioned = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$App*" } | Sort-Object DisplayName -Unique
-
-        if (-not $AppxPackage -and -not $Provisioned) 
-        {
-            Write-Warning "$App is not installed."
-            continue
-        }
-
-        try 
-        {
-            if ($Provisioned) 
-            {
-                Write-Verbose "Removing provisioned package $($Provisioned.DisplayName)..."
-                $Provisioned | Remove-AppxProvisionedPackage -Online -AllUsers | Out-Null
-            }
-            if ($AppxPackage) 
-            {
-                Write-Verbose "Removing app package $($AppxPackage.Name)..."
-                $AppxPackage | Remove-AppxPackage -AllUsers | Out-Null
-            }
-            Write-Host "Removed: $App"
-        }
-        catch 
-        {
-            Write-Error "Failed to remove ${App}: $($_.Exception.Message)"
-            $global:ExitCode = 1
-        }
-    }
-}
-
-Write-Host "Checking if Chrome is already installed..." -ForegroundColor Cyan
 # --- Function: check whether Chrome is actually installed ---
 function Test-ChromeInstalled 
 {
+    Write-Host "Checking if Chrome is already installed..." -ForegroundColor Cyan
+
     $uninstallKeys = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
@@ -132,7 +54,6 @@ function Test-ChromeInstalled
 # Function to install Chrome using Winget or MSI fallback
 function Install-Chrome
 {
-    Write-Host "Checking if Chrome is already installed..." -ForegroundColor Cyan
     $ChromeInstalled = Test-ChromeInstalled
 
     if ($ChromeInstalled) 
@@ -279,17 +200,17 @@ function installApps
 function installOffice 
 {
     # Prompt for Office 365 download and install
-    $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
+    $response = Read-Host "`nDo you want to install Microsoft 365 (Y/N)?"
 
     while($response -notmatch '^(Y|y|N|n)$') 
     {
         Write-Host "Invalid response. Please enter Y or N."
-        $response = Read-Host "Do you want to install Microsoft 365 (Y/N)?"
+        $response = Read-Host "`nDo you want to install Microsoft 365 (Y/N)?"
     }
 
     if($response -match '^(N|n)') 
     {
-        Write-Host "Installation cancelled by user."
+        Write-Host "Installation cancelled by user.`n"
         return
     }
 
@@ -327,19 +248,97 @@ function installOffice
         -ArgumentList "/configure `"$xmlFile`"" `
         -Wait -NoNewWindow
 
-    Write-Host "`nOffice installation completed."
+    Write-Host "`nOffice installation completed.`n"
+}
+
+# This doesn't seem to be doing anything when ran - NEEDS FIXING
+# Function to remove bloatware apps
+function Remove-Bloatware 
+{
+    foreach ($App in $AppList) 
+    {
+        $AppxPackage = Get-AppxPackage -AllUsers | Where-Object { $_.Name -Like "*$App*" } | Sort-Object Name -Unique
+        $Provisioned = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$App*" } | Sort-Object DisplayName -Unique
+
+        if (-not $AppxPackage -and -not $Provisioned) 
+        {
+            Write-Warning "$App is not installed."
+            continue
+        }
+
+        try 
+        {
+            if ($Provisioned) 
+            {
+                Write-Verbose "Removing provisioned package $($Provisioned.DisplayName)..."
+                $Provisioned | Remove-AppxProvisionedPackage -Online -AllUsers | Out-Null
+            }
+            if ($AppxPackage) 
+            {
+                Write-Verbose "Removing app package $($AppxPackage.Name)..."
+                $AppxPackage | Remove-AppxPackage -AllUsers | Out-Null
+            }
+            Write-Host "Removed: $App"
+        }
+        catch 
+        {
+            Write-Error "Failed to remove ${App}: $($_.Exception.Message)"
+            $global:ExitCode = 1
+        }
+    }
+}
+# Function to reset taskbar pins to only File Explorer and Firefox
+function Reset-TaskbarPins 
+{
+    Write-Host "`nResetting taskbar..."
+
+    # Kill Explorer
+    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+
+    # Remove pinned items (shortcuts + registry state)
+    $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+    if (Test-Path $taskbarPath) 
+    {
+        Remove-Item "$taskbarPath\*" -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
+
+    # Restart Explorer
+    Start-Process explorer.exe
+    Start-Sleep -Seconds 5
+}
+
+# Prompts the user and sets timezone to CST
+function setTimeZone 
+{
+    # Prompt for time zone change 
+    $response = Read-Host "`nDo you want to set the time zone to Central Standard Time (Y/N)?"
+
+    while($response -notmatch '^(Y|y|N|n)$') 
+    {
+        Write-Host "Invalid response. Please enter Y or N."
+        $response = Read-Host "`nDo you want to set the time zone to Central Standard Time (Y/N)?"
+    }
+
+    if($response -match '^(Y|y)') 
+    {
+        Write-Host "Setting timezone to Central Standard Time..."
+        Set-TimeZone -Id "Central Standard Time"
+        return
+    }
+    else { Write-Warning "Timezone wasn't changed." }
 }
 
 # Function to clean up disk and create a restore point
 function cleanRestore 
 {
     # Run Disk Cleanup silently and wait
-    Write-Host "Running Disk Cleanup (silent) and waiting for it to finish..."
+    Write-Host "`nRunning Disk Cleanup (silent) and waiting for it to finish..."
     Start-Process cleanmgr.exe -ArgumentList "/sagerun:1" -Wait -NoNewWindow
     Write-Host "Disk Cleanup completed."
 
     # Create a System Restore Point
-    Write-Host "Creating System Restore Point: 'Initial Setup'..."
+    Write-Host "`nSystem Restore Point: 'Initial Setup'..."
     try 
     {
         # Enables system protection
@@ -347,15 +346,15 @@ function cleanRestore
         Enable-ComputerRestore -Drive $drive
         Start-Sleep -Seconds 5  # Gives it time to initialize 
 
-        # Set sahdow storage size to 5% of total disk space 
-        $psDrive = Get-PSDrive -Name $drive.TrimEnd(':')
-        $totalSpace = $psDrive.Used + $psDrive.Free
-        $maxSizeBytes = [math]::Round($totalSpace * 0.05)
-        $maxSizeMB = [math]::Round($maxSizeBytes / 1MB)
+        # # Set shadow storage size to 5% of total disk space 
+        # $psDrive = Get-PSDrive -Name $drive.TrimEnd(':')
+        # $totalSpace = $psDrive.Used + $psDrive.Free
+        # $maxSizeBytes = [math]::Round($totalSpace * 0.05)
+        # $maxSizeMB = [math]::Round($maxSizeBytes / 1MB)
 
-        # Resize shadow storage
-        vssadmin Resize ShadowStorage /For=$drive /On=$drive /MaxSize=${maxSizeMB}MB | Out-Null
-        Start-Sleep -Seconds 5
+        # # Resize shadow storage
+        # vssadmin Resize ShadowStorage /For=$drive /On=$drive /MaxSize=${maxSizeMB}MB | Out-Null
+        # Start-Sleep -Seconds 5
 
         # Confirm if System Restore is active
         $restorePointList = Get-ComputerRestorePoint -ErrorAction SilentlyContinue
@@ -375,9 +374,6 @@ function cleanRestore
         Write-Error "An error occurred while creating the restore point: $_"
 
     }
-
-    # Run the restore point again to ensure it's created
-    Checkpoint-Computer -Description "Initial Setup" -RestorePointType "MODIFY_SETTINGS"
 }
 
 # Function to set power plan to High Performance and adjust settings
@@ -385,7 +381,7 @@ function setPowerPlan
 {
     # Sets power plan to high performance, disables Fast Startup, disables sleep, lock screen after 30 minutes
     # Attempts to set lid/power button/sleep button actions to "do nothing", but this funciton is not working as intended. 
-    Write-Output "Switching to High performance power plan..."
+    Write-Output "`nSwitching to High performance power plan..."
 
     # Set High performance as active
     $activePlan = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
@@ -689,16 +685,87 @@ function Disable-StartupApps
     
     Write-Host "`nSpecific startup apps disabled successfully." -ForegroundColor Green
 }
+function Test-AgentsInstalled 
+{
+    param([string]$MsiPath)
+
+    $productCode = (Get-WmiObject Win32_Product |
+        Where-Object { $_.LocalPackage -eq $MsiPath }).IdentifyingNumber
+
+    return [bool]$productCode
+}
+
+function InstallAgents
+{
+    if(Test-AgentsInstalled) 
+    {
+        Write-Output "Management agents already installed. Skipping installation."
+        return
+    }
+    else
+    {
+        Write-Output "Installing management agents..."
+
+        $scriptRoot = if ($PSScriptRoot) {
+            $PSScriptRoot
+        } else {
+            Get-Location 
+        }
+
+        $agentsPath = Join-Path $scriptRoot "agents"
+
+        if (-not (Test-Path $agentsPath)) {
+            Write-Warning "Agents folder not found at $agentsPath. Skipping agent installation."
+            return
+        }
+
+        $msiFiles = Get-ChildItem -Path $agentsPath -Filter *.msi -File
+
+        if ($msiFiles.Count -eq 0) {
+            Write-Warning "No MSI files found in agents folder."
+            return
+        }
+
+        foreach ($msi in $msiFiles) {
+            Write-Output "Installing agent: $($msi.Name)"
+            Start-Process msiexec.exe `
+                -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart" `
+                -Wait
+        }
+        Write-Output "Management agents installation completed."
+    }
+}
+
+function windowsUpdate
+{
+    Write-Output "Triggering Windows Update scan..."
+
+    # Force Windows Update to scan, download, and install
+    Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartScan" -NoNewWindow
+    Start-Sleep -Seconds 5
+
+    Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartDownload" -NoNewWindow
+    Start-Sleep -Seconds 5
+
+    Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartInstall" -NoNewWindow
+
+    Write-Output "Windows Update initiated in background.`n"
+}
 
 
 # Main script execution
 Assert-Admin
+windowsUpdate
 installApps
 Remove-Bloatware
+setPowerPlan
 Disable-StartupApps 
 Reset-TaskbarPins
-cleanRestore
-setPowerPlan
 setTimeZone
+cleanRestore
 installOffice  
+InstallAgents
+
+Write-Warning "Windows Updates may require a reboot to complete.`n`n"
+
 exit $global:ExitCode
