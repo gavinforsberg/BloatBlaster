@@ -755,6 +755,7 @@ function windowsUpdate
 
 # Main script execution
 Assert-Admin
+InstallAgents
 windowsUpdate
 installApps
 Remove-Bloatware
@@ -764,7 +765,6 @@ Reset-TaskbarPins
 setTimeZone
 cleanRestore
 installOffice  
-InstallAgents
 
 Write-Warning "Windows Updates may require a reboot to complete.`n`n"
 
