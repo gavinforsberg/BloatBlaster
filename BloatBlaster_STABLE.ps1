@@ -59,7 +59,7 @@ function Install-Chrome
 
     if ($LastWingetOutput -match "hash does not match") 
     {
-        Write-Warning "Hash mismatch detected. Ignoring the hash mismatch and trying again..."
+        Write-Warning "`nHash mismatch detected. Ignoring the hash mismatch and trying again...`n"
         winget settings --enable InstallerHashOverride 
         winget install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements --ignore-security-hash
     }
@@ -142,7 +142,7 @@ function installApps
             try 
             {
                 winget install --exact --id $($opt.Id) --silent --accept-package-agreements --accept-source-agreements
-                Write-Host "Successfully installed $($opt.Name)." -ForegroundColor Green
+                Write-Host "$($opt.Name)." -ForegroundColor Green
             }
             catch 
             {
@@ -323,12 +323,30 @@ function cleanRestore
             Write-Host "System Restore Point 'Initial Setup' created successfully."
         } else 
         {
-            Write-Warning "System Restore is not enabled or supported. Restore point not created."
+            # Write-Warning "System Restore is not enabled or supported. Restore point not created."
+            Write-Warning "System Restore was not enabled. Trying again..."
+
+            $drive = "C:"
+            Enable-ComputerRestore -Drive $drive
+            Start-Sleep -Seconds 5
+        }
+
+        $restorePointList = Get-ComputerRestorePoint -ErrorAction SilentlyContinue
+
+                
+        if ($restorePointList) 
+        {
+            # Create a restore point
+            Checkpoint-Computer -Description "Initial Setup" -RestorePointType "MODIFY_SETTINGS"
+            Write-Host "System Restore Point 'Initial Setup' created successfully."
+        } else 
+        {
+            Write-Warning "System Restore failed again. Skipping restore point creation."
         }
     }
     catch 
     {
-        Write-Error "An error occurred while creating the restore point: $_"
+        Write-Error "An unexpected error occurred while creating the restore point: $_"
 
     }
 }
