@@ -498,6 +498,7 @@ function Disable-StartupApps
                             Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
                             Write-Host "    Removed: $($_.Name)" -ForegroundColor Green
                             $foundAndDisabled = $true
+                            Write-Host $foundAndDisabled
                         }
                     }
                 }
@@ -522,7 +523,7 @@ function Disable-StartupApps
         }
         
         if (-not $foundAndDisabled) {
-            Write-Host "    Not found or already disabled" -ForegroundColor Gray
+            Write-Host "Not found or already disabled" -ForegroundColor Gray
         }
     }
     
