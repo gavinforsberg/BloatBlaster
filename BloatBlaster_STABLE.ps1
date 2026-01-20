@@ -102,13 +102,14 @@ function installApps
     $OptionalSoftware = @(
         @{ Name = "Lenovo System Update"; Id = "Lenovo.SystemUpdate" },
         @{ Name = "7-Zip"; Id = "7zip.7zip" },
+        @{ Name = "Webex"; Id = "Cisco.Webex" },
         @{ Name = "VLC Media Player"; Id = "VideoLAN.VLC" },
         @{ Name = "Webex"; Id = "Cisco.Webex" },
         @{ Name = "Zoom"; Id = "Zoom.Zoom" }
     )
 
     # Install Chrome (Winget Ignoring Security Hash)
-    Install-Chrome
+#  Install-Chrome
 
     foreach ($app in $AppsToInstall) 
     {
