@@ -27,47 +27,6 @@ function Assert-Admin
     }
 }
 
-# Function to install Chrome using Winget or MSI fallback
-function Install-Chrome
-{
-    # Winget attempt
-    $ChromeWinget = Start-Process -FilePath "winget" `
-        -ArgumentList "install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements" `
-        -NoNewWindow -PassThru -Wait
-
-    # Winget exit codes Chrome uses incorrectly but still means "Chrome is installed"
-    $ChromeOkExitCodes = @(
-        0,                # success
-        -1978335189,      # Chrome "already installed" bug
-        -1978335159,      # Chrome "already installed but no upgrade" bug
-        -1978335192       # Chrome "no applicable installer" bug
-    )
-
-    if ($ChromeOkExitCodes -contains $ChromeWinget.ExitCode)
-    {
-        if (Test-ChromeInstalled) 
-        {
-            Write-Host "Chrome installed or already present. Winget considered successful." -ForegroundColor Green
-            return
-        }
-    }
-
-    # If winget *really* failed, detect hash mismatch
-    Write-Warning "Winget exited with code $($ChromeWinget.ExitCode). Checking output..."
-
-    $LastWingetOutput = winget install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements 2>&1
-
-    if ($LastWingetOutput -match "hash does not match") 
-    {
-        Write-Warning "`nHash mismatch detected. Ignoring the hash mismatch and trying again...`n"
-        winget settings --enable InstallerHashOverride 
-        winget install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements --ignore-security-hash --force
-    }
-    else { Write-Error "Winget failed, but no hash mismatch detected." }
-
-    winget settings --disable InstallerHashOverride 
-}
-
 # Function to install Firefox, Chrome, and Adobe Acrobat Reader using winget
 function installApps 
 {
@@ -108,8 +67,9 @@ function installApps
         @{ Name = "Zoom"; Id = "Zoom.Zoom" }
     )
 
-    # Install Chrome (Winget Ignoring Security Hash)
-    Install-Chrome
+    # Install Chrome (using --force switch to override hash issues)
+    winget install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements --force
+    Write-Host "Google Chrome installation attempted via winget with hash override.`n"
 
     foreach ($app in $AppsToInstall) 
     {
@@ -296,6 +256,7 @@ function cleanRestore
     Write-Host "Disk Cleanup completed."
 
     # Create a System Restore Point
+    Write-Host "Creating System Restore Point: 'Initial Setup'..."
     Write-Host "`nSystem Restore Point: 'Initial Setup'..."
     try 
     {
@@ -305,14 +266,14 @@ function cleanRestore
         Start-Sleep -Seconds 5  # Gives it time to initialize 
 
         # # Set shadow storage size to 5% of total disk space 
-        # $psDrive = Get-PSDrive -Name $drive.TrimEnd(':')
-        # $totalSpace = $psDrive.Used + $psDrive.Free
-        # $maxSizeBytes = [math]::Round($totalSpace * 0.05)
-        # $maxSizeMB = [math]::Round($maxSizeBytes / 1MB)
+        $psDrive = Get-PSDrive -Name $drive.TrimEnd(':')
+        $totalSpace = $psDrive.Used + $psDrive.Free
+        $maxSizeBytes = [math]::Round($totalSpace * 0.05)
+        $maxSizeMB = [math]::Round($maxSizeBytes / 1MB)
 
         # # Resize shadow storage
-        # vssadmin Resize ShadowStorage /For=$drive /On=$drive /MaxSize=${maxSizeMB}MB | Out-Null
-        # Start-Sleep -Seconds 5
+        vssadmin Resize ShadowStorage /For=$drive /On=$drive /MaxSize=${maxSizeMB}MB | Out-Null
+        Start-Sleep -Seconds 5
 
         # Confirm if System Restore is active
         $restorePointList = Get-ComputerRestorePoint -ErrorAction SilentlyContinue
@@ -732,7 +693,6 @@ function windowsUpdate
 
 # Main script execution
 Assert-Admin
-InstallAgents
 windowsUpdate
 installApps
 Remove-Bloatware
@@ -741,6 +701,7 @@ Disable-StartupApps
 Reset-TaskbarPins
 setTimeZone
 cleanRestore
+InstallAgents
 installOffice  
 
 Write-Warning "Windows Updates may require a reboot to complete.`n`n"
