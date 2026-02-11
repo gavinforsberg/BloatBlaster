@@ -43,6 +43,8 @@ function installApps
 
     # Re-register App Installer (repairs WinGet integration)
     Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\AppxManifest.xml" -DisableDevelopmentMode -ErrorAction SilentlyContinue
+    # Re-register Winget package:
+    Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.Winget.Source_*\AppXManifest.xml" -DisableDevelopmentMode
 
     # Reset winget sources
     winget source reset --force
@@ -61,7 +63,15 @@ function installApps
     $OptionalSoftware = @(
         @{ Name = "Lenovo System Update"; Id = "Lenovo.SystemUpdate" },
         @{ Name = "7-Zip"; Id = "7zip.7zip" },
-        @{ Name = "Webex"; Id = "Cisco.Webex" },
+        @{ Name = "Creative Cloud"; Id = "Adobe.CreativeCloud" },
+        @{ Name = "Acrobat Pro"; Id = "Adobe.Acrobat.Pro" },
+        @{ Name = "Google Earth"; Id = "Google.EarthPro" },
+        @{ Name = "Dropbox"; Id = "Dropbox.Dropbox" },
+        @{ Name = "PDFgear"; Id = "PDFgear.PDFgear" },
+        @{ Name = "TeraCopy"; Id = "CodeSector.TeraCopy" },
+        @{ Name = "Warp"; Id = "Cloudflare.Warp" },
+        @{ Name = "Advanced IP Scanner"; Id = "Famatech.AdvancedIPScanner" },
+        @{ Name = "ShareX"; Id = "ShareX.ShareX" }
         @{ Name = "VLC Media Player"; Id = "VideoLAN.VLC" },
         @{ Name = "Webex"; Id = "Cisco.Webex" },
         @{ Name = "Zoom"; Id = "Zoom.Zoom" }
