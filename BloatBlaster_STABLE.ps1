@@ -79,7 +79,6 @@ function installApps
 
     # Install Chrome (using --force switch to override hash issues)
     winget install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements --force
-    Write-Host "Google Chrome installation attempted via winget with hash override.`n"
 
     foreach ($app in $AppsToInstall) 
     {
