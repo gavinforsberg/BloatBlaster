@@ -45,6 +45,7 @@ function installApps
     Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\AppxManifest.xml" -DisableDevelopmentMode -ErrorAction SilentlyContinue
     # Re-register Winget package:
     Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.Winget.Source_*\AppXManifest.xml" -DisableDevelopmentMode
+    
 
     # Reset winget sources
     winget source reset --force
@@ -71,7 +72,10 @@ function installApps
         @{ Name = "TeraCopy"; Id = "CodeSector.TeraCopy" },
         @{ Name = "Warp"; Id = "Cloudflare.Warp" },
         @{ Name = "Advanced IP Scanner"; Id = "Famatech.AdvancedIPScanner" },
-        @{ Name = "ShareX"; Id = "ShareX.ShareX" }
+        @{ Name = "ShareX"; Id = "ShareX.ShareX" },
+        @{ Name = "BlueBeam"; Id = "Bluebeam.Revu.20" },
+        @{ Name = "ChatGPT"; Id = "lencx.ChatGPT" },
+        @{ Name = "iTunes"; Id = "Apple.iTunes" },
         @{ Name = "VLC Media Player"; Id = "VideoLAN.VLC" },
         @{ Name = "Webex"; Id = "Cisco.Webex" },
         @{ Name = "Zoom"; Id = "Zoom.Zoom" }
