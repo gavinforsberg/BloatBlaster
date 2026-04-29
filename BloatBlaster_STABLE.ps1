@@ -255,6 +255,27 @@ function setTimeZone
     {
         Write-Host "Setting timezone to Central Standard Time..."
         Set-TimeZone -Id "Central Standard Time"
+
+        Write-Host "Forcing time sync..." -ForegroundColor Cyan
+
+        # Ensure service is running
+        Set-Service w32time -StartupType Automatic
+        Start-Service w32time -ErrorAction SilentlyContinue
+
+        # Give it a second to initialize
+        Start-Sleep -Seconds 2
+
+        # Force sync
+        w32tm /resync /force 2>$null
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Time sync failed. Retrying..."
+            Start-Sleep -Seconds 3
+            w32tm /resync /force
+        }
+
+        # Output status
+        w32tm /query /status
         return
     }
     else { Write-Warning "Timezone wasn't changed." }
