@@ -27,6 +27,32 @@ function Assert-Admin
     }
 }
 
+# Helper function to check if a winget package is installed
+function Test-WingetInstalled {
+    param(
+        [string]$PackageId
+    )
+
+    $result = winget list --id $PackageId --exact 2>$null
+
+    if ($result -match [regex]::Escape($PackageId)) {
+        return $true
+    }
+
+    return $false
+}
+
+# Helper function to show optional software list
+function Show-OptionalMenu {
+    Write-Host "`nOptional Software:" -ForegroundColor Cyan
+
+    for ($i = 0; $i -lt $OptionalSoftware.Count; $i++) {
+        Write-Host "[$($i+1)] $($OptionalSoftware[$i].Name)"
+    }
+
+    Write-Host "[0] Done / Skip"
+}
+
 # Function to install Firefox, Chrome, and Adobe Acrobat Reader using winget
 function installApps 
 {
@@ -77,17 +103,17 @@ function installApps
         @{ Name = "ChatGPT"; Id = "lencx.ChatGPT" },
         @{ Name = "iTunes"; Id = "Apple.iTunes" },
         @{ Name = "Nmap"; Id = "Insecure.Nmap" },
-        @{ Name = "Nmap"; Id = "JAMSoftware.TreeSize.Free" },
-        @{ Name = "Nmap"; Id = "Waterfox.Waterfox" },
-        @{ Name = "Nmap"; Id = "Splashtop.SplashtopBusiness" },
-        @{ Name = "Nmap"; Id = "CyberPowerSystemsInc.PowerPanelPersonal" },
-        @{ Name = "Nmap"; Id = "WiresharkFoundation.Wireshark" },
-        @{ Name = "Nmap"; Id = "Eraser.Eraser" },
-        @{ Name = "Nmap"; Id = "OpenVPNTechnologies.OpenVPNConnect" },
-        @{ Name = "Nmap"; Id = "Git.Git" },
-        @{ Name = "Nmap"; Id = "Codex" },
-        @{ Name = "Nmap"; Id = "Microsoft.VisualStudioCode" },
-        @{ Name = "Nmap"; Id = "Python.Python.3.14" },
+        @{ Name = "TreeSize"; Id = "JAMSoftware.TreeSize.Free" },
+        @{ Name = "WaterFox"; Id = "Waterfox.Waterfox" },
+        @{ Name = "Splashtop"; Id = "Splashtop.SplashtopBusiness" },
+        @{ Name = "PowerPanel"; Id = "CyberPowerSystemsInc.PowerPanelPersonal" },
+        @{ Name = "Wireshark"; Id = "WiresharkFoundation.Wireshark" },
+        @{ Name = "Eraser"; Id = "Eraser.Eraser" },
+        @{ Name = "OpenVPN"; Id = "OpenVPNTechnologies.OpenVPNConnect" },
+        @{ Name = "Git"; Id = "Git.Git" },
+        @{ Name = "Codex"; Id = "Codex" },
+        @{ Name = "Visual Studio Code"; Id = "Microsoft.VisualStudioCode" },
+        @{ Name = "Python"; Id = "Python.Python.3.14" },
         @{ Name = "VLC Media Player"; Id = "VideoLAN.VLC" },
         @{ Name = "Webex"; Id = "Cisco.Webex" },
         @{ Name = "Zoom"; Id = "Zoom.Zoom" }
@@ -111,32 +137,85 @@ function installApps
         }
     }
 
-    foreach ($opt in $OptionalSoftware) 
-    {
-        $answer = Read-Host "`nDo you want to install $($opt.Name) (Y/N)?"
+    # Check if winget package is already installed
+    function Test-WingetInstalled {
+        param(
+            [string]$PackageId
+        )
 
-        # Validate input
-        while($answer -notmatch '^[YyNn]$') 
-        {
-            Write-Host "Invalid response. Please enter Y or N." -ForegroundColor Red
-            $answer = Read-Host "`nDo you want to install $($opt.Name) (Y/N)?"
+        $result = winget list --id $PackageId --exact 2>$null
+
+        if ($result -match [regex]::Escape($PackageId)) {
+            return $true
         }
 
-        # Process valid input
-        if ($answer -match '^[Yy]$') 
-        {
-            try 
-            {
-                winget install --exact --id $($opt.Id) --silent --accept-package-agreements --accept-source-agreements
-                Write-Host "$($opt.Name)." -ForegroundColor Green
+        return $false
+    }
+
+    Show-OptionalMenu
+
+    $selection = Read-Host "`nEnter numbers (comma-separated, e.g. 1,3,5) or 0 to skip"
+
+    if ($selection -eq "0") {
+        Write-Host "Skipping optional installs."
+    }
+    else {
+
+        $choices = $selection -split ',' | ForEach-Object { $_.Trim() }
+
+        $processed = @{}
+
+        foreach ($choice in $choices) {
+
+            if ($choice -notmatch '^\d+$') {
+                Write-Warning "Invalid input: $choice"
+                continue
             }
-            catch 
-            {
-                Write-Error "Failed to install $($opt.Name): $($_.Exception.Message)"
+
+            $index = [int]$choice - 1
+
+            if ($index -lt 0 -or $index -ge $OptionalSoftware.Count) {
+                Write-Warning "Invalid selection: $choice"
+                continue
+            }
+
+            if ($processed.ContainsKey($index)) {
+                continue
+            }
+
+            $processed[$index] = $true
+
+            $app = $OptionalSoftware[$index]
+
+            # Check if already installed
+            Write-Host "`nChecking $($app.Name)..." -ForegroundColor Cyan
+
+            if (Test-WingetInstalled -PackageId $app.Id) {
+                Write-Host "$($app.Name) is already installed. Skipping." -ForegroundColor Yellow
+                continue
+            }
+
+            Write-Host "Installing $($app.Name)..." -ForegroundColor Cyan
+
+            try {
+                winget install --id $($app.Id) `
+                    --silent `
+                    --accept-package-agreements `
+                    --accept-source-agreements
+
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "$($app.Name) installed successfully." -ForegroundColor Green
+                }
+                else {
+                    Write-Warning "$($app.Name) install returned exit code $LASTEXITCODE"
+                    $global:ExitCode = 1
+                }
+            }
+            catch {
+                Write-Error "Failed to install $($app.Name): $($_.Exception.Message)"
                 $global:ExitCode = 1
             }
         }
-        else { Write-Host "Skipping $($opt.Name)." -ForegroundColor Gray }
     }
 }
 
