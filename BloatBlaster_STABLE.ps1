@@ -144,7 +144,8 @@ function installApps
     }
 
     # Check if winget package is already installed
-    function Test-WingetInstalled {
+    function Test-WingetInstalled 
+    {
         param(
             [string]$PackageId
         )
@@ -162,10 +163,10 @@ function installApps
 
     $selection = Read-Host "`nEnter numbers (comma-separated, e.g. 1,3,5) or 0 to skip"
 
-    if ($selection -eq "0") {
-        Write-Host "Skipping optional installs."
-    }
-    else {
+    if ($selection -eq "0") 
+    {        Write-Host "Skipping optional installs."   }
+    else 
+    {
 
         $choices = $selection -split ',' | ForEach-Object { $_.Trim() }
 
@@ -223,6 +224,19 @@ function installApps
             }
         }
     }
+
+    # Update all installed applications using winget
+    Write-Host "`nUpdating installed applications..." -ForegroundColor Cyan
+
+    winget upgrade --all `
+    --silent `
+    --accept-package-agreements `
+    --accept-source-agreements
+
+    if ($LASTEXITCODE -eq 0) 
+    {    Write-Host "Application updates completed successfully." -ForegroundColor Green    }
+    else 
+    {    Write-Warning "Winget application update returned exit code $LASTEXITCODE."    }
 }
 
 function installOffice 
@@ -315,26 +329,43 @@ function Remove-Bloatware
         }
     }
 }
+
 # Function to reset taskbar pins to only File Explorer and Firefox
 function Reset-TaskbarPins 
 {
-    Write-Host "`nResetting taskbar..."
 
-    # Kill Explorer
-    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+        # Prompt for time zone change 
+    $response = Read-Host "`nDo you want to reset the taskbar?"
 
-    # Remove pinned items (shortcuts + registry state)
-    $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-    if (Test-Path $taskbarPath) 
+    while($response -notmatch '^(Y|y|N|n)$') 
     {
-        Remove-Item "$taskbarPath\*" -Force -ErrorAction SilentlyContinue
+        Write-Host "Invalid response. Please enter Y or N."
+        $response = Read-Host "`nDo you want to reset the taskbar?"
     }
-    Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
 
-    # Restart Explorer
-    Start-Process explorer.exe
-    Start-Sleep -Seconds 5
+    if($response -match '^(Y|y)') 
+    {
+
+        Write-Host "`nResetting taskbar..."
+
+        # Kill Explorer
+        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+
+        # Remove pinned items (shortcuts + registry state)
+        $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+        if (Test-Path $taskbarPath) 
+        {
+            Remove-Item "$taskbarPath\*" -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
+
+        # Restart Explorer
+        Start-Process explorer.exe
+        Start-Sleep -Seconds 5
+    }
+    else { Write-Warning "Taskbar wasn't reset." }
 }
+
 
 # Prompts the user and sets timezone to CST
 function setTimeZone 
