@@ -841,22 +841,222 @@ function InstallAgents
     }
 }
 
+# function windowsUpdate
+# {
+#     Write-Output "Triggering Windows Update scan..."
+
+#     # Force Windows Update to scan, download, and install
+#     Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartScan" -NoNewWindow
+#     Start-Sleep -Seconds 5
+
+#     Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartDownload" -NoNewWindow
+#     Start-Sleep -Seconds 5
+
+#     Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartInstall" -NoNewWindow
+
+#     Write-Output "Windows Update initiated in background.`n"
+# }
+
+# Testing new script for Windows updates 
 function windowsUpdate
 {
-    Write-Output "Triggering Windows Update scan..."
+    Write-Output ""
+    Write-Output "========================================"
+    Write-Output " Windows Update - Computer Preparation"
+    Write-Output "========================================"
 
-    # Force Windows Update to scan, download, and install
-    Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartScan" -NoNewWindow
-    Start-Sleep -Seconds 5
+    $UsoClient = "$env:SystemRoot\System32\UsoClient.exe"
+    $MaxCycles = 5
+    $Cycle = 0
 
-    Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartDownload" -NoNewWindow
-    Start-Sleep -Seconds 5
+    if (-not (Test-Path $UsoClient)) {
+        Write-Output "ERROR: UsoClient.exe not found."
+        return
+    }
 
-    Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartInstall" -NoNewWindow
+    # Make sure the Windows Update service is available
+    $WUService = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
 
-    Write-Output "Windows Update initiated in background.`n"
+    if (-not $WUService) {
+        Write-Output "ERROR: Windows Update service not found."
+        return
+    }
+
+    if ($WUService.Status -ne "Running") {
+        Write-Output "Starting Windows Update service..."
+        Start-Service -Name wuauserv -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 5
+    }
+
+    while ($Cycle -lt $MaxCycles)
+    {
+        $Cycle++
+
+        Write-Output ""
+        Write-Output "----------------------------------------"
+        Write-Output "Windows Update cycle $Cycle of $MaxCycles"
+        Write-Output "----------------------------------------"
+
+        # --------------------------------------------------
+        # Start Windows Update scan
+        # --------------------------------------------------
+
+        Write-Output "Checking for available updates..."
+
+        Start-Process `
+            -FilePath $UsoClient `
+            -ArgumentList "StartInteractiveScan" `
+            -WindowStyle Hidden
+
+        # Give Windows Update time to begin processing
+        Write-Output "Waiting for Windows Update scan..."
+        Start-Sleep -Seconds 20
+
+        # --------------------------------------------------
+        # Connect to Windows Update Agent
+        # --------------------------------------------------
+
+        try {
+            $Session = New-Object -ComObject Microsoft.Update.Session
+            $Searcher = $Session.CreateUpdateSearcher()
+
+            Write-Output "Searching for applicable updates..."
+
+            $SearchResult = $Searcher.Search(
+                "IsInstalled=0 and IsHidden=0 and Type='Software'"
+            )
+        }
+        catch {
+            Write-Output "ERROR: Unable to query Windows Update."
+            Write-Output $_.Exception.Message
+            return
+        }
+
+        $Updates = $SearchResult.Updates
+
+        # --------------------------------------------------
+        # No updates found
+        # --------------------------------------------------
+
+        if ($Updates.Count -eq 0) {
+            Write-Output ""
+            Write-Output "No additional Windows Updates are currently available."
+            Write-Output "Windows Update appears to be current."
+            break
+        }
+
+        Write-Output ""
+        Write-Output "Updates found: $($Updates.Count)"
+
+        foreach ($Update in $Updates) {
+            Write-Output "  - $($Update.Title)"
+        }
+
+        # --------------------------------------------------
+        # Download updates
+        # --------------------------------------------------
+
+        Write-Output ""
+        Write-Output "Starting Windows Update download..."
+
+        $Downloader = $Session.CreateUpdateDownloader()
+        $Downloader.Updates = $Updates
+
+        try {
+            $DownloadResult = $Downloader.Download()
+
+            Write-Output "Download operation completed."
+            Write-Output "Download result code: $($DownloadResult.ResultCode)"
+        }
+        catch {
+            Write-Output "WARNING: Some updates could not be downloaded."
+            Write-Output $_.Exception.Message
+        }
+
+        # --------------------------------------------------
+        # Re-query updates after download
+        # --------------------------------------------------
+
+        Write-Output ""
+        Write-Output "Preparing updates for installation..."
+
+        try {
+            $SearchResult = $Searcher.Search(
+                "IsInstalled=0 and IsHidden=0 and Type='Software'"
+            )
+
+            $Updates = $SearchResult.Updates
+        }
+        catch {
+            Write-Output "WARNING: Unable to refresh update list."
+        }
+
+        # --------------------------------------------------
+        # Install updates
+        # --------------------------------------------------
+
+        if ($Updates.Count -gt 0) {
+
+            Write-Output "Installing $($Updates.Count) update(s)..."
+
+            $Installer = $Session.CreateUpdateInstaller()
+            $Installer.Updates = $Updates
+
+            try {
+                $InstallResult = $Installer.Install()
+
+                Write-Output "Installation operation completed."
+                Write-Output "Installation result code: $($InstallResult.ResultCode)"
+
+                if ($InstallResult.RebootRequired) {
+                    Write-Output ""
+                    Write-Output "========================================"
+                    Write-Output " REBOOT REQUIRED"
+                    Write-Output "========================================"
+                    Write-Output "Windows Update requires a reboot."
+                    Write-Output "The computer should be rebooted before"
+                    Write-Output "continuing the preparation process."
+                    Write-Output ""
+
+                    return
+                }
+            }
+            catch {
+                Write-Output "WARNING: Update installation encountered an error."
+                Write-Output $_.Exception.Message
+            }
+        }
+
+        # --------------------------------------------------
+        # Give Windows Update time to finish
+        # --------------------------------------------------
+
+        Write-Output ""
+        Write-Output "Allowing Windows Update to finish processing..."
+        Start-Sleep -Seconds 15
+
+        # Loop back and check for additional updates
+    }
+
+    # --------------------------------------------------
+    # Final status
+    # --------------------------------------------------
+
+    Write-Output ""
+    Write-Output "========================================"
+
+    if ($Cycle -ge $MaxCycles) {
+        Write-Output "Maximum update cycles reached."
+        Write-Output "Run Windows Update again after reboot if necessary."
+    }
+    else {
+        Write-Output "Windows Update preparation complete."
+        Write-Output "No additional updates were detected."
+    }
+
+    Write-Output "========================================"
+    Write-Output ""
 }
-
 
 # Main script execution
 Assert-Admin
