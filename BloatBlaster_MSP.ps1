@@ -27,6 +27,95 @@ function Assert-Admin
     }
 }
 
+# Bootstrap before Windows Update or software installation. This uses Microsoft's
+# supported repair cmdlet to deploy the latest stable App Installer/WinGet and
+# its required dependencies, without deleting source databases or app data.
+# https://learn.microsoft.com/windows/package-manager/winget/
+function Initialize-WinGet {
+    Assert-Admin
+    Write-Host "`n--- Updating App Installer and checking WinGet prerequisites ---" -ForegroundColor Cyan
+    $previousTls = [Net.ServicePointManager]::SecurityProtocol
+    try {
+        if (-not [Environment]::Is64BitProcess) {
+            throw 'Run this script in 64-bit Windows PowerShell 5.1.'
+        }
+        if ([Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
+            throw 'Run provisioning as an elevated technician account; this interactive script requires a user session.'
+        }
+        [Net.ServicePointManager]::SecurityProtocol = $previousTls -bor [Net.SecurityProtocolType]::Tls12
+        $before = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction Stop
+        if ($before) { Write-Host "  App Installer before: $($before.Version)" }
+        else { Write-Host '  App Installer is missing for this account; installing it.' }
+
+        Write-Host '  Checking PowerShell Gallery and NuGet prerequisites ...'
+        if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue |
+            Where-Object { [version]$_.Version -ge [version]'2.8.5.201' })) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force -ErrorAction Stop | Out-Null
+        }
+        $gallery = Get-PSRepository -Name PSGallery -ErrorAction Stop
+        if ($gallery.SourceLocation.TrimEnd('/') -ne 'https://www.powershellgallery.com/api/v2') {
+            throw 'PSGallery does not point to the official PowerShell Gallery.'
+        }
+        $latest = Find-Module -Name Microsoft.WinGet.Client -Repository PSGallery -ErrorAction Stop
+        $available = Get-Module -Name Microsoft.WinGet.Client -ListAvailable |
+            Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $available -or $available.Version -lt [version]$latest.Version) {
+            Write-Host "  Installing Microsoft.WinGet.Client $($latest.Version) ..."
+            Install-Module -Name Microsoft.WinGet.Client -RequiredVersion $latest.Version -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        }
+        Import-Module Microsoft.WinGet.Client -MinimumVersion $latest.Version -Force -ErrorAction Stop
+        Write-Host '  Installing/repairing the latest stable App Installer and required dependencies ...'
+        $repairResult = @(Repair-WinGetPackageManager -AllUsers -Latest -Force -ErrorAction Stop)
+        $repairResult | Out-Host
+        foreach ($result in $repairResult) {
+            if (($result -is [int] -or $result -is [long]) -and $result -ne 0) {
+                throw "App Installer repair returned exit code $result."
+            }
+        }
+
+        $package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction Stop |
+            Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $package -or $package.Status -ne 'Ok') {
+            throw 'App Installer is not registered in a healthy state for the current account.'
+        }
+        Write-Host "  App Installer after: $($package.Version)" -ForegroundColor Green
+        foreach ($dependency in $package.Dependencies) {
+            Write-Host "  Dependency: $($dependency.Name) $($dependency.Version) [$($dependency.Status)]"
+            if ($dependency.Status -ne 'Ok') { throw "Dependency is unhealthy: $($dependency.Name)" }
+        }
+        # Resolve the registered package directly: no reliance on a stale PATH or alias.
+        $script:WinGetPath = Join-Path $package.InstallLocation 'winget.exe'
+        if (-not (Test-Path -LiteralPath $script:WinGetPath -PathType Leaf)) {
+            throw 'The registered App Installer package does not contain winget.exe.'
+        }
+        Invoke-WinGetPreflightCommand -Arguments @('--version')
+        Invoke-WinGetPreflightCommand -Arguments @('--info')
+        Invoke-WinGetPreflightCommand -Arguments @('source', 'update', '--name', 'winget', '--disable-interactivity')
+        # A real repository query verifies more than just launching the executable.
+        Invoke-WinGetPreflightCommand -Arguments @('show', '--id', 'Microsoft.PowerShell', '--exact', '--source', 'winget', '--accept-source-agreements', '--disable-interactivity')
+        Write-Host '  WinGet executable and community source verified.' -ForegroundColor Green
+    }
+    finally {
+        [Net.ServicePointManager]::SecurityProtocol = $previousTls
+    }
+}
+
+function Invoke-WinGetPreflightCommand {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    Write-Host "  Verifying: winget $($Arguments -join ' ')" -ForegroundColor Cyan
+    & $script:WinGetPath @Arguments | Out-Host
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { throw "WinGet check failed (exit $code): $($Arguments -join ' ')" }
+}
+
+# All existing install/list/upgrade calls use the exact executable verified above.
+function winget {
+    if (-not $script:WinGetPath) { throw 'WinGet startup verification has not completed.' }
+    & $script:WinGetPath @args
+    $global:LASTEXITCODE = $LASTEXITCODE
+}
+
+
 # Helper function to check if a winget package is installed
 function Test-WingetInstalled {
     param(
@@ -56,28 +145,7 @@ function Show-OptionalMenu {
 # Function to install Firefox, Chrome, and Adobe Acrobat Reader using winget
 function installApps 
 {
-    Write-Host "`n--- FULL WINGET SOURCE RESET ---" -ForegroundColor Cyan
-
-    # Stop anything possibly locking the database
-    taskkill /IM WinGet.exe /F 2>$null
-    taskkill /IM AppInstaller.exe /F 2>$null
-
-    # Remove corrupted WinGet database + indexes
-    Remove-Item "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\*" -Recurse -Force -ErrorAction SilentlyContinue
-    # Remove legacy WinGet sqlite DB (causes 100% of hash mismatch cases)
-    Remove-Item "$env:LOCALAPPDATA\Microsoft\WinGet" -Recurse -Force -ErrorAction SilentlyContinue
-
-    # Re-register App Installer (repairs WinGet integration)
-    Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\AppxManifest.xml" -DisableDevelopmentMode -ErrorAction SilentlyContinue
-    # Re-register Winget package:
-    Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.Winget.Source_*\AppXManifest.xml" -DisableDevelopmentMode
-    
-
-    # Reset winget sources
-    winget source reset --force
-    winget source update
-
-    Write-Host "--- Winget source reset complete ---`n" -ForegroundColor Green
+    # WinGet and its dependencies were updated and verified during startup.
 
     # Install common applications using winget
     Write-Host "`nStarting software installations via winget..."
@@ -1221,6 +1289,14 @@ function windowsUpdate
 
 # Main script execution
 Assert-Admin
+try {
+    Initialize-WinGet
+}
+catch {
+    Write-Warning ("App Installer/WinGet startup check failed: {0}" -f $_.Exception.Message)
+    Write-Warning 'Provisioning stopped before updates or application changes. Check network access, policies and pending reboots, then rerun.'
+    exit 1
+}
 windowsUpdate
 installApps
 Remove-Bloatware
