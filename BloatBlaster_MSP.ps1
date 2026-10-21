@@ -1,0 +1,1237 @@
+﻿#Requires -Version 5.1
+
+[CmdletBinding()]
+param (
+    [Parameter()]
+    [String]$AppsToRemove = "Amazon.com.Amazon, AmazonVideo.PrimeVideo, Clipchamp.Clipchamp, Disney.37853FC22B2CE, DropboxInc.Dropbox, Facebook.Facebook, Facebook.InstagramBeta, king.com.BubbleWitch3Saga, king.com.CandyCrushSaga, king.com.CandyCrushSodaSaga, LinkedInforWindows, 5A894077.McAfeeSecurity, 4DF9E0F8.Netflix, SpotifyAB.SpotifyMusic, BytedancePte.Ltd.TikTok, 5319275A.WhatsAppDesktop, Microsoft.XboxApp, Microsoft.XboxGameOverlay, Microsoft.XboxGamingOverlay, Microsoft.XboxSpeechToTextOverlay, Microsoft.Xbox.TCUI, Microsoft.XboxIdentityProvider",
+    [Parameter()]
+    [String]$OverrideWithCustomField
+)
+
+$global:ExitCode = 0
+$AppList  = New-Object System.Collections.Generic.List[string]
+
+# Tests if the user is running with elevated/admin privileges
+function Test-IsElevated 
+{
+    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $p  = New-Object System.Security.Principal.WindowsPrincipal($id)
+    return $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+function Assert-Admin 
+{
+    if (-not (Test-IsElevated)) 
+    {
+        Write-Error "Access Denied. Please run with Administrator privileges."
+        exit 1
+    }
+}
+
+# Helper function to check if a winget package is installed
+function Test-WingetInstalled {
+    param(
+        [string]$PackageId
+    )
+
+    $result = winget list --id $PackageId --exact 2>$null
+
+    if ($result -match [regex]::Escape($PackageId)) {
+        return $true
+    }
+
+    return $false
+}
+
+# Helper function to show optional software list
+function Show-OptionalMenu {
+    Write-Host "`nOptional Software:" -ForegroundColor Cyan
+
+    for ($i = 0; $i -lt $OptionalSoftware.Count; $i++) {
+        Write-Host "[$($i+1)] $($OptionalSoftware[$i].Name)"
+    }
+
+    Write-Host "[0] Done / Skip"
+}
+
+# Function to install Firefox, Chrome, and Adobe Acrobat Reader using winget
+function installApps 
+{
+    Write-Host "`n--- FULL WINGET SOURCE RESET ---" -ForegroundColor Cyan
+
+    # Stop anything possibly locking the database
+    taskkill /IM WinGet.exe /F 2>$null
+    taskkill /IM AppInstaller.exe /F 2>$null
+
+    # Remove corrupted WinGet database + indexes
+    Remove-Item "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\*" -Recurse -Force -ErrorAction SilentlyContinue
+    # Remove legacy WinGet sqlite DB (causes 100% of hash mismatch cases)
+    Remove-Item "$env:LOCALAPPDATA\Microsoft\WinGet" -Recurse -Force -ErrorAction SilentlyContinue
+
+    # Re-register App Installer (repairs WinGet integration)
+    Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\AppxManifest.xml" -DisableDevelopmentMode -ErrorAction SilentlyContinue
+    # Re-register Winget package:
+    Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.Winget.Source_*\AppXManifest.xml" -DisableDevelopmentMode
+    
+
+    # Reset winget sources
+    winget source reset --force
+    winget source update
+
+    Write-Host "--- Winget source reset complete ---`n" -ForegroundColor Green
+
+    # Install common applications using winget
+    Write-Host "`nStarting software installations via winget..."
+
+    $AppsToInstall = @(
+        @{ Name = "Mozilla Firefox"; Id = "Mozilla.Firefox" },
+        @{ Name = "Adobe Acrobat Reader DC"; Id = "Adobe.Acrobat.Reader.64-bit" }
+    )
+
+    $OptionalSoftware = @(
+        @{ Name = "7-Zip"; Id = "7zip.7zip" },
+        @{ Name = "Acrobat Pro"; Id = "Adobe.Acrobat.Pro" },
+        @{ Name = "Advanced IP Scanner"; Id = "Famatech.AdvancedIPScanner" },
+        @{ Name = "BlueBeam"; Id = "Bluebeam.Revu.20" },
+        @{ Name = "Canva"; Id = "Canva.Canva" },
+        @{ Name = "ChatGPT"; Id = "lencx.ChatGPT" },
+        @{ Name = "Codex"; Id = "Codex" },
+        @{ Name = "Copy Trans"; Id = "CopyTrans.Studio" },
+        @{ Name = "Creative Cloud"; Id = "Adobe.CreativeCloud" },
+        @{ Name = "Crystal Disk Info"; Id = "CrystalDewWorld.CrystalDiskInfo.KureiKeiEdition" },
+        @{ Name = "Dropbox"; Id = "Dropbox.Dropbox" },
+        @{ Name = "Eraser"; Id = "Eraser.Eraser" },
+        @{ Name = "Git"; Id = "Git.Git" },
+        @{ Name = "Google Earth"; Id = "Google.EarthPro" },
+        @{ Name = "GoTo"; Id = "GoTo.GoTo" },
+        @{ Name = "HP Image Assistant"; Id = "HP.ImageAssistant" },
+        @{ Name = "iTunes"; Id = "Apple.iTunes" },
+        @{ Name = "Lenovo System Update"; Id = "Lenovo.SystemUpdate" },
+        @{ Name = "Nano Text Editor"; Id = "GNU.Nano" },
+        @{ Name = "Nmap"; Id = "Insecure.Nmap" },
+        @{ Name = "OpenVPN"; Id = "OpenVPNTechnologies.OpenVPNConnect" },
+        @{ Name = "PDFgear"; Id = "PDFgear.PDFgear" },
+        @{ Name = "PowerPanel"; Id = "CyberPowerSystemsInc.PowerPanelPersonal" },
+        @{ Name = "Putty"; Id = "PuTTY.PuTTY" },
+        @{ Name = "Python"; Id = "Python.Python.3.14" },
+        @{ Name = "Revo Uninstaller"; Id = "RevoUninstaller.RevoUninstaller" },
+        @{ Name = "Rufus"; Id = " Rufus.Rufus" },
+        @{ Name = "ShareX"; Id = "ShareX.ShareX" },
+        @{ Name = "Splashtop"; Id = "Splashtop.SplashtopBusiness" },
+        @{ Name = "Spotify"; Id = "Spotify.Spotify" },
+        @{ Name = "TeraCopy"; Id = "CodeSector.TeraCopy" },
+        @{ Name = "TreeSize"; Id = "JAMSoftware.TreeSize.Free" },
+        @{ Name = "Virtual Box"; Id = "Oracle.VirtualBox" },
+        @{ Name = "Visual Studio Code"; Id = "Microsoft.VisualStudioCode" },
+        @{ Name = "VLC Media Player"; Id = "VideoLAN.VLC" },
+        @{ Name = "Warp"; Id = "Cloudflare.Warp" },
+        @{ Name = "WaterFox"; Id = "Waterfox.Waterfox" },
+        @{ Name = "Webex"; Id = "Cisco.Webex" },
+        @{ Name = "Wireshark"; Id = "WiresharkFoundation.Wireshark" },
+        @{ Name = "Wireshark"; Id = "WiresharkFoundation.Wireshark" },
+        @{ Name = "Zoom"; Id = "Zoom.Zoom" }
+    )
+
+    # Install Chrome (using --force switch to override hash issues)
+    winget install --exact --id Google.Chrome --silent --accept-source-agreements --accept-package-agreements --force
+
+    foreach ($app in $AppsToInstall) 
+    {
+        Write-Host "`nAttempting to install $($app.Name)..."
+        try 
+        {
+            winget install --exact --id $($app.Id) --silent --accept-package-agreements --accept-source-agreements
+            Write-Host "Successfully installed $($app.Name)."
+        }
+        catch 
+        {
+            Write-Error "Failed to install $($app.Name): $($_.Exception.Message)"
+            $global:ExitCode = 1
+        }
+    }
+
+    # Check if winget package is already installed
+    function Test-WingetInstalled 
+    {
+        param(
+            [string]$PackageId
+        )
+
+        $result = winget list --id $PackageId --exact 2>$null
+
+        if ($result -match [regex]::Escape($PackageId)) {
+            return $true
+        }
+
+        return $false
+    }
+
+    Show-OptionalMenu
+
+    $selection = Read-Host "`nEnter numbers (comma-separated, e.g. 1,3,5) or 0 to skip"
+
+    if ($selection -eq "0") 
+    {        Write-Host "Skipping optional installs."   }
+    else 
+    {
+
+        $choices = $selection -split ',' | ForEach-Object { $_.Trim() }
+
+        $processed = @{}
+
+        foreach ($choice in $choices) {
+
+            if ($choice -notmatch '^\d+$') {
+                Write-Warning "Invalid input: $choice"
+                continue
+            }
+
+            $index = [int]$choice - 1
+
+            if ($index -lt 0 -or $index -ge $OptionalSoftware.Count) {
+                Write-Warning "Invalid selection: $choice"
+                continue
+            }
+
+            if ($processed.ContainsKey($index)) {
+                continue
+            }
+
+            $processed[$index] = $true
+
+            $app = $OptionalSoftware[$index]
+
+            # Check if already installed
+            Write-Host "`nChecking $($app.Name)..." -ForegroundColor Cyan
+
+            if (Test-WingetInstalled -PackageId $app.Id) {
+                Write-Host "$($app.Name) is already installed. Skipping." -ForegroundColor Yellow
+                continue
+            }
+
+            Write-Host "Installing $($app.Name)..." -ForegroundColor Cyan
+
+            try {
+                winget install --id $($app.Id) `
+                    --silent `
+                    --accept-package-agreements `
+                    --accept-source-agreements
+
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "$($app.Name) installed successfully." -ForegroundColor Green
+                }
+                else {
+                    Write-Warning "$($app.Name) install returned exit code $LASTEXITCODE"
+                    $global:ExitCode = 1
+                }
+            }
+            catch {
+                Write-Error "Failed to install $($app.Name): $($_.Exception.Message)"
+                $global:ExitCode = 1
+            }
+        }
+    }
+
+    # Update all installed applications using winget
+    Write-Host "`nUpdating installed applications..." -ForegroundColor Cyan
+
+    winget upgrade --all `
+    --silent `
+    --accept-package-agreements `
+    --accept-source-agreements
+
+    if ($LASTEXITCODE -eq 0) 
+    {    Write-Host "Application updates completed successfully." -ForegroundColor Green    }
+    else 
+    {    Write-Warning "Winget application update returned exit code $LASTEXITCODE."    }
+}
+
+function installOffice 
+{
+    # Prompt for Office 365 download and install
+    $response = Read-Host "`nDo you want to install Microsoft 365 (Y/N)?"
+
+    while($response -notmatch '^(Y|y|N|n)$') 
+    {
+        Write-Host "Invalid response. Please enter Y or N."
+        $response = Read-Host "`nDo you want to install Microsoft 365 (Y/N)?"
+    }
+
+    if($response -match '^(N|n)') 
+    {
+        Write-Host "Installation cancelled by user.`n"
+        return
+    }
+
+    Write-Host "`nStarting Microsoft 365 download and installation..."
+
+    # Path where Office Deployment Tool and XML live
+    $officePath = "C:\Installs\Office 365 Business Premium - Offline"
+    $setupExe   = Join-Path $officePath "setup.exe"
+    $xmlFile    = Join-Path $officePath "General M365 Business.xml"
+
+    $officePath = "C:\Installs\Office 365 Business Premium - Offline"
+    Set-Location $officePath
+
+        # Validate paths
+    if (!(Test-Path $setupExe)) {
+        Write-Error "setup.exe NOT FOUND at: $setupExe"
+        return
+    }
+    if (!(Test-Path $xmlFile)) {
+        Write-Error "XML NOT FOUND at: $xmlFile"
+        return
+    }
+
+    Write-Host "Using XML:`n$xmlFile"
+
+    # Step 1 – Download Office
+    Start-Process -FilePath $setupExe `
+        -ArgumentList "/download `"$xmlFile`"" `
+        -Wait -NoNewWindow
+
+    Write-Host "`nDownload complete."
+
+    # Step 2 – Install Office
+    Start-Process -FilePath $setupExe `
+        -ArgumentList "/configure `"$xmlFile`"" `
+        -Wait -NoNewWindow
+
+    Write-Host "`nOffice installation completed.`n"
+}
+
+# Targeted MSP removal. Package manager owns WindowsApps and per-user package
+# data cleanup: never take ownership or recursively delete profile/app folders.
+# References: learn.microsoft.com/powershell/module/appx/remove-appxpackage
+# and learn.microsoft.com/powershell/module/dism/remove-appxprovisionedpackage
+function Remove-Bloatware {
+    Assert-Admin
+    Write-Host "`n--- Targeted application removal ---" -ForegroundColor Cyan
+    $targets = @(
+        'Microsoft.Copilot', 'Microsoft.BingNews', 'Microsoft.BingWeather',
+        'DropboxInc.Dropbox', 'DropboxInc.DropboxOEM',
+        'Microsoft.GamingApp', 'Microsoft.XboxApp', 'Microsoft.XboxGameOverlay',
+        'Microsoft.XboxGamingOverlay', 'Microsoft.XboxSpeechToTextOverlay',
+        'Microsoft.Xbox.TCUI', 'Microsoft.XboxIdentityProvider'
+    )
+    # Preserve custom lists; custom field is a NinjaOne field NAME, not code.
+    $configured = $AppsToRemove
+    if (-not [string]::IsNullOrWhiteSpace($OverrideWithCustomField)) {
+        try {
+            if (-not (Get-Command Ninja-Property-Get -ErrorAction SilentlyContinue)) {
+                throw 'Ninja-Property-Get is unavailable; cannot read the override field.'
+            }
+            $value = Ninja-Property-Get $OverrideWithCustomField -ErrorAction Stop
+            if ([string]::IsNullOrWhiteSpace([string]$value)) { throw 'Override field is empty.' }
+            $configured = [string]$value
+        }
+        catch {
+            Write-Warning "Custom field failed; retaining supplied app list: $($_.Exception.Message)"
+            $global:ExitCode = 1
+        }
+    }
+    foreach ($name in ($configured -split ',')) {
+        $name = $name.Trim()
+        if (-not $name) { continue }
+        # No wildcards or partial package-name matching.
+        if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]+$') {
+            Write-Warning "Rejected nonliteral package name: $name"
+            $global:ExitCode = 1
+            continue
+        }
+        $targets += $name
+    }
+    $results = @()
+    foreach ($name in ($targets | Sort-Object -Unique)) {
+        Write-Host "`nChecking $name ..." -ForegroundColor Cyan
+        try {
+            $installed = @(Get-AppxPackage -AllUsers -PackageTypeFilter Main,Bundle -ErrorAction Stop |
+                Where-Object { $_.Name -eq $name })
+            $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop |
+                Where-Object { $_.DisplayName -eq $name })
+            if ($installed.Count -eq 0 -and $provisioned.Count -eq 0) {
+                Write-Host '  Not present.' -ForegroundColor DarkGray
+                $results += [pscustomobject]@{ App = $name; Status = 'Not present' }
+                continue
+            }
+            $failed = $false
+            foreach ($package in $provisioned) {
+                try {
+                    Write-Host "  Removing provisioning: $($package.PackageName)"
+                    $result = Remove-AppxProvisionedPackage -Online -AllUsers -PackageName $package.PackageName -ErrorAction Stop
+                    if ($result.RestartNeeded) { Write-Warning '  Reboot required to finish removal.' }
+                }
+                catch {
+                    $failed = $true
+                    Write-Warning "  Provisioning removal failed: $($_.Exception.Message)"
+                }
+            }
+            # Bundles must be removed via their parent, not each child resource.
+            $bundles = @($installed | Where-Object { $_.IsBundle })
+            if ($bundles.Count -gt 0) { $installed = $bundles }
+            foreach ($package in ($installed | Sort-Object PackageFullName -Unique)) {
+                try {
+                    if ($package.NonRemovable -or $package.IsFramework) {
+                        throw 'Windows marks this package protected or shared; leaving it intact.'
+                    }
+                    Write-Host "  Removing for all users: $($package.PackageFullName)"
+                    Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+                }
+                catch {
+                    $failed = $true
+                    Write-Warning "  Installed-package removal failed: $($_.Exception.Message)"
+                }
+            }
+            $remaining = @(Get-AppxPackage -AllUsers -PackageTypeFilter Main,Bundle -ErrorAction Stop |
+                Where-Object { $_.Name -eq $name })
+            $remainingProvisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop |
+                Where-Object { $_.DisplayName -eq $name })
+            if ($remaining.Count -gt 0 -or $remainingProvisioned.Count -gt 0) { $failed = $true }
+            if ($failed) {
+                $global:ExitCode = 1
+                Write-Warning "  $name needs review; removal is incomplete or returned errors. Reboot and rerun if in use."
+                $status = 'Needs review'
+            }
+            else {
+                Write-Host '  Removal verified. Windows manages package-file cleanup.' -ForegroundColor Green
+                $status = 'Removed and verified'
+            }
+            $results += [pscustomobject]@{ App = $name; Status = $status }
+        }
+        catch {
+            $global:ExitCode = 1
+            Write-Warning "  Detection/verification failed for ${name}: $($_.Exception.Message)"
+            $results += [pscustomobject]@{ App = $name; Status = 'Detection/verification failed' }
+        }
+    }
+    Remove-DropboxPromotion
+    Write-Host "`nApplication removal summary" -ForegroundColor Cyan
+    $results | Format-Table -AutoSize | Out-Host
+    Write-Host 'Shared Gaming Services, Widgets/Web Experience, Office Copilot, Dropbox sync data and browser profiles are preserved.'
+}
+
+function Remove-DropboxPromotion {
+    Write-Host "`nChecking native Dropbox promotions ..." -ForegroundColor Cyan
+    # Avoid Win32_Product, which can trigger MSI repair across unrelated apps.
+    $keys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    $found = $false
+    foreach ($key in $keys) {
+        if (-not (Test-Path -LiteralPath $key)) { continue }
+        try {
+            $entries = @(Get-ChildItem -LiteralPath $key -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop |
+                Where-Object { $_.DisplayName -in @('Dropbox Promotion', 'Dropbox OEM', 'Dropbox 25 GB', 'Get Dropbox') })
+            foreach ($entry in $entries) {
+                $found = $true
+                try {
+                    Write-Host "  Found: $($entry.DisplayName)"
+                    # Only execute a recognized MSI uninstall; never evaluate arbitrary registry commands.
+                    if ($entry.WindowsInstaller -eq 1 -and $entry.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$') {
+                        $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList @('/x', $entry.PSChildName, '/qn', '/norestart') -Wait -PassThru -ErrorAction Stop
+                        if ($process.ExitCode -notin @(0, 1605, 1614, 3010)) { throw "MSI exit code $($process.ExitCode)" }
+                        if ($process.ExitCode -eq 3010) { Write-Warning '  Promotion removal requires reboot.' }
+                        if (Test-Path -LiteralPath $entry.PSPath) { throw 'Promotion registration remains; review after reboot.' }
+                        Write-Host '  Native promotion removal verified.' -ForegroundColor Green
+                    }
+                    elseif ($entry.UninstallString -match '^"([^"\r\n]+\\DropboxOEM\.exe)"\s+/(?:uninstall|remove)\s*$') {
+                        $exe = $Matches[1]
+                        $argument = ($entry.UninstallString -replace '^"[^"\r\n]+"\s+', '')
+                        if (-not [IO.Path]::IsPathRooted($exe) -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+                            throw 'OEM uninstaller path is unavailable.'
+                        }
+                        $signature = Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
+                        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O="?Dropbox(?:,? Inc\.?)?"?(?:,|$)') {
+                            throw 'OEM uninstaller does not have a valid Dropbox publisher signature.'
+                        }
+                        $process = Start-Process -FilePath $exe -ArgumentList $argument -Wait -PassThru -ErrorAction Stop
+                        if ($process.ExitCode -notin @(0, 3010)) { throw "OEM exit code $($process.ExitCode)" }
+                        if ($process.ExitCode -eq 3010) { Write-Warning '  OEM removal requires reboot.' }
+                        if (Test-Path -LiteralPath $entry.PSPath) { throw 'OEM registration remains; review after reboot.' }
+                        Write-Host '  Native OEM promotion removal verified.' -ForegroundColor Green
+                    }
+                    else {
+                        throw 'Unrecognized OEM uninstaller; remove this promotion through Installed apps. No arbitrary uninstall command was executed.'
+                    }
+                }
+                catch {
+                    $global:ExitCode = 1
+                    Write-Warning "  $($entry.DisplayName): $($_.Exception.Message)"
+                }
+            }
+        }
+        catch {
+            $global:ExitCode = 1
+            Write-Warning "  Could not inspect ${key}: $($_.Exception.Message)"
+        }
+    }
+    if (-not $found) { Write-Host '  No registered native promotion found in machine/current-user scope.' -ForegroundColor DarkGray }
+    # Only exact promotional link names; never delete a Dropbox folder or sync shortcut.
+    $roots = @("$env:PUBLIC\Desktop", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
+        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs", [Environment]::GetFolderPath('Desktop'))
+    foreach ($root in ($roots | Select-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        foreach ($leaf in @('Dropbox 25 GB.lnk', 'Get Dropbox.lnk', 'Dropbox Promotion.lnk')) {
+            $path = Join-Path $root $leaf
+            if (-not (Test-Path -LiteralPath $path)) { continue }
+            try {
+                $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse point skipped.' }
+                $shell = New-Object -ComObject WScript.Shell
+                $link = $shell.CreateShortcut($path)
+                if ([IO.Path]::GetFileName($link.TargetPath) -ne 'DropboxOEM.exe') {
+                    Write-Warning "  Unconfirmed promotional shortcut preserved: $path"
+                    continue
+                }
+                Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                Write-Host "  Removed OEM promotional shortcut: $path" -ForegroundColor Green
+            }
+            catch {
+                $global:ExitCode = 1
+                Write-Warning "  Shortcut cleanup failed for ${path}: $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
+
+# Function to reset taskbar pins to only File Explorer and Firefox
+function Reset-TaskbarPins 
+{
+
+        # Prompt for time zone change 
+    $response = Read-Host "`nDo you want to reset the taskbar?"
+
+    while($response -notmatch '^(Y|y|N|n)$') 
+    {
+        Write-Host "Invalid response. Please enter Y or N."
+        $response = Read-Host "`nDo you want to reset the taskbar?"
+    }
+
+    if($response -match '^(Y|y)') 
+    {
+
+        Write-Host "`nResetting taskbar..."
+
+        # Kill Explorer
+        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+
+        # Remove pinned items (shortcuts + registry state)
+        $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+        if (Test-Path $taskbarPath) 
+        {
+            Remove-Item "$taskbarPath\*" -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Recurse -ErrorAction SilentlyContinue
+
+        # Restart Explorer
+        Start-Process explorer.exe
+        Start-Sleep -Seconds 5
+    }
+    else { Write-Warning "Taskbar wasn't reset." }
+}
+
+
+# Prompts the user and sets timezone to CST
+function setTimeZone 
+{
+    # Prompt for time zone change 
+    $response = Read-Host "`nDo you want to set the time zone to Central Standard Time (Y/N)?"
+
+    while($response -notmatch '^(Y|y|N|n)$') 
+    {
+        Write-Host "Invalid response. Please enter Y or N."
+        $response = Read-Host "`nDo you want to set the time zone to Central Standard Time (Y/N)?"
+    }
+
+    if($response -match '^(Y|y)') 
+    {
+        Write-Host "Setting timezone to Central Standard Time..."
+        Set-TimeZone -Id "Central Standard Time"
+
+        Write-Host "Forcing time sync..." -ForegroundColor Cyan
+
+        # Ensure service is running
+        Set-Service w32time -StartupType Automatic
+        Start-Service w32time -ErrorAction SilentlyContinue
+
+        # Give it a second to initialize
+        Start-Sleep -Seconds 2
+
+        # Force sync
+        w32tm /resync /force 2>$null
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Time sync failed. Retrying..."
+            Start-Sleep -Seconds 3
+            w32tm /resync /force
+        }
+
+        # Output status
+        w32tm /query /status
+        return
+    }
+    else { Write-Warning "Timezone wasn't changed." }
+}
+
+# Function to clean up disk and create a restore point
+function cleanRestore 
+{
+    # Run Disk Cleanup silently and wait
+    Write-Host "`nRunning Disk Cleanup (silent) and waiting for it to finish..."
+    Start-Process cleanmgr.exe -ArgumentList "/sagerun:1" -Wait -NoNewWindow
+    Write-Host "Disk Cleanup completed."
+
+    # Create a System Restore Point
+    Write-Host "Creating System Restore Point: 'Initial Setup'..."
+    Write-Host "`nSystem Restore Point: 'Initial Setup'..."
+    try 
+    {
+        # Enables system protection
+        $drive = "C:"
+        Enable-ComputerRestore -Drive $drive
+        Start-Sleep -Seconds 5  # Gives it time to initialize 
+
+        # # Set shadow storage size to 5% of total disk space 
+        $psDrive = Get-PSDrive -Name $drive.TrimEnd(':')
+        $totalSpace = $psDrive.Used + $psDrive.Free
+        $maxSizeBytes = [math]::Round($totalSpace * 0.05)
+        $maxSizeMB = [math]::Round($maxSizeBytes / 1MB)
+
+        # # Resize shadow storage
+        vssadmin Resize ShadowStorage /For=$drive /On=$drive /MaxSize=${maxSizeMB}MB | Out-Null
+        Start-Sleep -Seconds 5
+
+        # Confirm if System Restore is active
+        $restorePointList = Get-ComputerRestorePoint -ErrorAction SilentlyContinue
+
+        if ($restorePointList) 
+        {
+            # Create a restore point
+            Checkpoint-Computer -Description "Initial Setup" -RestorePointType "MODIFY_SETTINGS"
+            Write-Host "System Restore Point 'Initial Setup' created successfully."
+        } else 
+        {
+            # Write-Warning "System Restore is not enabled or supported. Restore point not created."
+            Write-Warning "System Restore was not enabled. Trying again..."
+
+            $drive = "C:"
+            Enable-ComputerRestore -Drive $drive
+            Start-Sleep -Seconds 5
+        }
+
+        $restorePointList = Get-ComputerRestorePoint -ErrorAction SilentlyContinue
+
+                
+        if ($restorePointList) 
+        {
+            # Create a restore point
+            Checkpoint-Computer -Description "Initial Setup" -RestorePointType "MODIFY_SETTINGS"
+            Write-Host "System Restore Point 'Initial Setup' created successfully."
+        } else 
+        {
+            Write-Warning "System Restore failed again. Skipping restore point creation."
+        }
+    }
+    catch 
+    {
+        Write-Error "An unexpected error occurred while creating the restore point: $_"
+
+    }
+}
+
+# Function to set power plan to High Performance and adjust settings
+function setPowerPlan
+{
+    # Sets power plan to high performance, disables Fast Startup, disables sleep, lock screen after 30 minutes
+    # Attempts to set lid/power button/sleep button actions to "do nothing", but this funciton is not working as intended. 
+    Write-Output "`nSwitching to High performance power plan..."
+
+    # Set High performance as active
+    $activePlan = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+    powercfg.exe -setactive $activePlan
+
+    # 1. Set Sleep to Never
+    Write-Output "Setting battery sleep to 30 minutes, AC sleep to never..."
+    powercfg.exe /change standby-timeout-ac 0
+    powercfg.exe /change standby-timeout-dc 30
+
+    # 2. Set Lock Screen after 30 minutes (1800 seconds)
+    Write-Output "Set display shutoff to 30 minutes..."
+    powercfg -change -monitor-timeout-ac 30
+    powercfg -change -monitor-timeout-dc 30
+
+    # 3. Disable Fast Startup
+    Write-Output "Disabling Fast Startup..."
+    $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power'
+    Set-ItemProperty -Path $regPath -Name "HiberbootEnabled" -Value 0
+
+    # Apply the updated plan
+    powercfg /setactive $activePlan
+    Write-Output "Power configuration complete under High Performance plan."
+
+    # Modern Standby breaks this:  
+    # Button GUIDs
+    $SUB_BUTTONS   = "4f971e89-eebd-4455-a8de-9e59040e7347"
+    $LIDACTION     = "5ca83367-6e45-459f-a27b-476b1d01c936"
+    $PBUTTONACTION = "7648efa3-dd9c-4e3e-b566-50f929386280"
+    $SBUTTONACTION = "96996bc0-ad50-47ec-923b-6f41874dd9eb"
+
+    $doNothing = 0
+
+    # Lid
+    powercfg /SETACVALUEINDEX $activePlan $SUB_BUTTONS $LIDACTION $doNothing
+    powercfg /SETDCVALUEINDEX $activePlan $SUB_BUTTONS $LIDACTION $doNothing
+
+    # Power button
+    powercfg /SETACVALUEINDEX $activePlan $SUB_BUTTONS $PBUTTONACTION $doNothing
+    powercfg /SETDCVALUEINDEX $activePlan $SUB_BUTTONS $PBUTTONACTION $doNothing
+
+    # Sleep button (FIXED)
+    powercfg /SETACVALUEINDEX $activePlan $SUB_BUTTONS $SBUTTONACTION $doNothing
+    powercfg /SETDCVALUEINDEX $activePlan $SUB_BUTTONS $SBUTTONACTION $doNothing
+
+    # Apply
+    powercfg /SETACTIVE $activePlan
+
+    # Safe verification
+    # powercfg /QUERY $activePlan
+
+    # Apply the updated plan
+    powercfg /setactive $activePlan
+    Write-Output "Power plan updated successfully."
+}
+
+# Disable specific startup apps: Teams, Edge, OneDrive, Webex, Copilot
+function Disable-StartupApps 
+{
+    Write-Host "`nDisabling specific startup apps (Teams, Edge, OneDrive, Webex, Copilot)..." -ForegroundColor Cyan
+    
+    $appsToDisable = @(
+        @{ Name = "Teams"; Patterns = @("Teams", "ms-teams", "msteams") },
+        @{ Name = "Microsoft Edge"; Patterns = @("MicrosoftEdge", "msedge") },
+        @{ Name = "OneDrive"; Patterns = @("OneDrive") },
+        @{ Name = "Webex"; Patterns = @("Webex", "CiscoWebex") },
+        @{ Name = "Copilot"; Patterns = @("Copilot", "Microsoft.Copilot") }
+    )
+    
+    # Registry locations for startup items
+    $startupKeys = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"
+    )
+    
+    foreach ($app in $appsToDisable) {
+        $foundAndDisabled = $false
+        Write-Host "`n  Processing: $($app.Name)" -ForegroundColor Yellow
+        
+        # Check and REMOVE (not just disable) from registry Run keys
+        foreach ($key in $startupKeys) {
+            if (Test-Path $key) {
+                $properties = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+                if ($properties) {
+                    foreach ($property in $properties.PSObject.Properties) {
+                        $propName = $property.Name
+                        $propValue = $property.Value
+                        
+                        # Skip system properties
+                        if ($propName -in @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) {
+                            continue
+                        }
+                        
+                        # Check if this property matches any of our patterns
+                        foreach ($pattern in $app.Patterns) {
+                            if ($propName -like "*$pattern*" -or $propValue -like "*$pattern*") {
+                                Write-Host "    Found in registry: $propName at $key" -ForegroundColor Magenta
+                                
+                                # First, disable in StartupApproved
+                                $approvedKey = $key.Replace("Run", "Explorer\StartupApproved\Run")
+                                if (-not (Test-Path $approvedKey)) {
+                                    New-Item -Path $approvedKey -Force | Out-Null
+                                }
+                                
+                                try {
+                                    $disabledValue = [byte[]](0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+                                    Set-ItemProperty -Path $approvedKey -Name $propName -Value $disabledValue -ErrorAction Stop
+                                    
+                                    # Then REMOVE the entry entirely
+                                    Remove-ItemProperty -Path $key -Name $propName -ErrorAction Stop
+                                    Write-Host "    Removed: $propName" -ForegroundColor Green
+                                    $foundAndDisabled = $true
+                                }
+                                catch {
+                                    Write-Warning "    Could not remove ($propName): $($_.Exception.Message)"
+                                }
+                                
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        # Check and remove from startup folders
+        $startupPaths = @(
+            "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup",
+            "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+        )
+        
+        foreach ($path in $startupPaths) {
+            if (Test-Path $path) {
+                Get-ChildItem -Path $path -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
+                    foreach ($pattern in $app.Patterns) {
+                        if ($_.Name -like "*$pattern*") {
+                            Write-Host "    Found shortcut: $($_.Name)" -ForegroundColor Magenta
+                            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+                            Write-Host "    Removed: $($_.Name)" -ForegroundColor Green
+                            $foundAndDisabled = $true
+                            Write-Host $foundAndDisabled
+                        }
+                    }
+                }
+            }
+        }
+        
+        # Disable using Task Scheduler (common for OneDrive, Teams)
+        foreach ($pattern in $app.Patterns) {
+            try {
+                $tasks = Get-ScheduledTask -TaskName "*$pattern*" -ErrorAction SilentlyContinue
+                foreach ($task in $tasks) {
+                    if ($task.State -ne "Disabled") {
+                        Disable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop | Out-Null
+                        Write-Host "    Disabled scheduled task: $($task.TaskName)" -ForegroundColor Green
+                        $foundAndDisabled = $true
+                    }
+                }
+            }
+            catch {
+                # Silently continue if no tasks found
+            }
+        }
+        
+        if (-not $foundAndDisabled) {
+            Write-Host "Not found or already disabled" -ForegroundColor Gray
+        }
+    }
+    
+    # ===== TEAMS SPECIFIC =====
+    Write-Host "`n  Applying comprehensive Teams restrictions..." -ForegroundColor Yellow
+    
+    # Disable Teams auto-start for current user
+    $teamsConfigPath = "$env:APPDATA\Microsoft\Teams\desktop-config.json"
+    if (Test-Path $teamsConfigPath) {
+        try {
+            $teamsConfig = Get-Content $teamsConfigPath -Raw | ConvertFrom-Json
+            $teamsConfig.appPreferenceSettings.openAtLogin = $false
+            $teamsConfig.appPreferenceSettings.runningOnClose = $false
+            $teamsConfig | ConvertTo-Json -Depth 10 | Set-Content $teamsConfigPath
+            Write-Host "    Teams auto-start disabled in config" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "    Could not modify Teams config: $($_.Exception.Message)"
+        }
+    }
+    
+    # Remove all Teams startup registry entries (check multiple locations)
+    $teamsStartupLocations = @(
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"; Name = "com.squirrel.Teams.Teams" },
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"; Name = "Teams" },
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; Name = "com.squirrel.Teams.Teams" },
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; Name = "Teams" }
+    )
+    
+    foreach ($location in $teamsStartupLocations) {
+        if (Test-Path $location.Path) {
+            if (Get-ItemProperty -Path $location.Path -Name $location.Name -ErrorAction SilentlyContinue) {
+                Remove-ItemProperty -Path $location.Path -Name $location.Name -ErrorAction SilentlyContinue
+                Write-Host "    Removed Teams from: $($location.Path)\$($location.Name)" -ForegroundColor Green
+            }
+        }
+    }
+    
+    # Disable Teams via Group Policy registry
+    $teamsPolicyKey = "HKCU:\Software\Policies\Microsoft\Office\16.0\common\officeupdate"
+    if (-not (Test-Path $teamsPolicyKey)) {
+        New-Item -Path $teamsPolicyKey -Force | Out-Null
+    }
+    Set-ItemProperty -Path $teamsPolicyKey -Name "preventteamsinstall" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+    Write-Host "    Teams prevented via policy registry" -ForegroundColor Green
+    
+    # ===== COPILOT SPECIFIC =====
+    Write-Host "`n  Applying comprehensive Copilot restrictions..." -ForegroundColor Yellow
+    
+    # Disable Copilot via multiple registry locations
+    $copilotKeys = @(
+        @{ Path = "HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot"; Name = "TurnOffWindowsCopilot"; Value = 1 },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"; Name = "TurnOffWindowsCopilot"; Value = 1 },
+        @{ Path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name = "ShowCopilotButton"; Value = 0 },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"; Name = "CopilotPageContext"; Value = 0 },
+        @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"; Name = "HubsSidebarEnabled"; Value = 0 }
+    )
+    
+    foreach ($key in $copilotKeys) {
+        try {
+            if (-not (Test-Path $key.Path)) {
+                New-Item -Path $key.Path -Force | Out-Null
+            }
+            Set-ItemProperty -Path $key.Path -Name $key.Name -Value $key.Value -Type DWord -ErrorAction Stop
+            Write-Host "    Set $($key.Path)\$($key.Name) = $($key.Value)" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "    Could not set $($key.Path)\$($key.Name): $($_.Exception.Message)"
+        }
+    }
+    
+    # Remove Copilot from startup
+    $copilotStartupLocations = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+    )
+    
+    foreach ($loc in $copilotStartupLocations) {
+        if (Test-Path $loc) {
+            Get-ItemProperty -Path $loc -ErrorAction SilentlyContinue | 
+                ForEach-Object {
+                    $_.PSObject.Properties | Where-Object { 
+                        $_.Name -notmatch "^PS" -and $_.Value -match "Copilot" 
+                    } | ForEach-Object {
+                        Remove-ItemProperty -Path $loc -Name $_.Name -ErrorAction SilentlyContinue
+                        Write-Host "    Removed Copilot from: $loc\$($_.Name)" -ForegroundColor Green
+                    }
+                }
+        }
+    }
+    
+    # ===== ONEDRIVE =====
+    Write-Host "`n  Applying additional OneDrive restrictions..." -ForegroundColor Yellow
+    try {
+        # Remove OneDrive from Run keys
+        $oneDriveRunKeys = @(
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+        )
+        
+        foreach ($key in $oneDriveRunKeys) {
+            if (Test-Path $key) {
+                if (Get-ItemProperty -Path $key -Name "OneDrive" -ErrorAction SilentlyContinue) {
+                    Remove-ItemProperty -Path $key -Name "OneDrive" -ErrorAction SilentlyContinue
+                    Write-Host "    Removed OneDrive from: $key" -ForegroundColor Green
+                }
+            }
+        }
+    }
+    catch {
+        Write-Warning "    Could not disable OneDrive via registry: $($_.Exception.Message)"
+    }
+    
+    # ===== EDGE =====
+    Write-Host "`n  Preventing Microsoft Edge background processes..." -ForegroundColor Yellow
+    try {
+        $edgeKeys = @(
+            @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"; Name = "BackgroundModeEnabled"; Value = 0 },
+            @{ Path = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"; Name = "StartupBoostEnabled"; Value = 0 },
+            @{ Path = "HKCU:\Software\Policies\Microsoft\Edge"; Name = "BackgroundModeEnabled"; Value = 0 },
+            @{ Path = "HKCU:\Software\Policies\Microsoft\Edge"; Name = "StartupBoostEnabled"; Value = 0 }
+        )
+        
+        foreach ($key in $edgeKeys) {
+            if (-not (Test-Path $key.Path)) {
+                New-Item -Path $key.Path -Force | Out-Null
+            }
+            Set-ItemProperty -Path $key.Path -Name $key.Name -Value $key.Value -Type DWord -ErrorAction Stop
+        }
+        Write-Host "    Edge background mode disabled" -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "    Could not disable Edge background mode: $($_.Exception.Message)"
+    }
+    
+    Write-Host "`nSpecific startup apps disabled successfully." -ForegroundColor Green
+}
+function Test-AgentsInstalled 
+{
+    param([string]$MsiPath)
+
+    $productCode = (Get-WmiObject Win32_Product |
+        Where-Object { $_.LocalPackage -eq $MsiPath }).IdentifyingNumber
+
+    return [bool]$productCode
+}
+
+function InstallAgents
+{
+    if(Test-AgentsInstalled) 
+    {
+        Write-Output "Management agents already installed. Skipping installation."
+        return
+    }
+    else
+    {
+        Write-Output "Installing management agents..."
+
+        $scriptRoot = if ($PSScriptRoot) {
+            $PSScriptRoot
+        } else {
+            Get-Location 
+        }
+
+        $agentsPath = Join-Path $scriptRoot "agents"
+
+        if (-not (Test-Path $agentsPath)) {
+            Write-Warning "Agents folder not found at $agentsPath. Skipping agent installation."
+            return
+        }
+
+        $msiFiles = Get-ChildItem -Path $agentsPath -Filter *.msi -File
+
+        if ($msiFiles.Count -eq 0) {
+            Write-Warning "No MSI files found in agents folder."
+            return
+        }
+
+        foreach ($msi in $msiFiles) {
+            Write-Output "Installing agent: $($msi.Name)"
+            Start-Process msiexec.exe `
+                -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart" `
+                -Wait
+        }
+        Write-Output "Management agents installation completed."
+    }
+}
+
+# function windowsUpdate
+# {
+#     Write-Output "Triggering Windows Update scan..."
+
+#     # Force Windows Update to scan, download, and install
+#     Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartScan" -NoNewWindow
+#     Start-Sleep -Seconds 5
+
+#     Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartDownload" -NoNewWindow
+#     Start-Sleep -Seconds 5
+
+#     Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartInstall" -NoNewWindow
+
+#     Write-Output "Windows Update initiated in background.`n"
+# }
+
+# Testing new script for Windows updates 
+function windowsUpdate
+{
+    Write-Output ""
+    Write-Output "========================================"
+    Write-Output " Windows Update - Computer Preparation"
+    Write-Output "========================================"
+
+    $UsoClient = "$env:SystemRoot\System32\UsoClient.exe"
+    $MaxCycles = 5
+    $Cycle = 0
+
+    if (-not (Test-Path $UsoClient)) {
+        Write-Output "ERROR: UsoClient.exe not found."
+        return
+    }
+
+    # Make sure the Windows Update service is available
+    $WUService = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
+
+    if (-not $WUService) {
+        Write-Output "ERROR: Windows Update service not found."
+        return
+    }
+
+    if ($WUService.Status -ne "Running") {
+        Write-Output "Starting Windows Update service..."
+        Start-Service -Name wuauserv -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 5
+    }
+
+    while ($Cycle -lt $MaxCycles)
+    {
+        $Cycle++
+
+        Write-Output ""
+        Write-Output "----------------------------------------"
+        Write-Output "Windows Update cycle $Cycle of $MaxCycles"
+        Write-Output "----------------------------------------"
+
+        # --------------------------------------------------
+        # Start Windows Update scan
+        # --------------------------------------------------
+
+        Write-Output "Checking for available updates..."
+
+        Start-Process `
+            -FilePath $UsoClient `
+            -ArgumentList "StartInteractiveScan" `
+            -WindowStyle Hidden
+
+        # Give Windows Update time to begin processing
+        Write-Output "Waiting for Windows Update scan..."
+        Start-Sleep -Seconds 20
+
+        # --------------------------------------------------
+        # Connect to Windows Update Agent
+        # --------------------------------------------------
+
+        try {
+            $Session = New-Object -ComObject Microsoft.Update.Session
+            $Searcher = $Session.CreateUpdateSearcher()
+
+            Write-Output "Searching for applicable updates..."
+
+            $SearchResult = $Searcher.Search(
+                "IsInstalled=0 and IsHidden=0 and Type='Software'"
+            )
+        }
+        catch {
+            Write-Output "ERROR: Unable to query Windows Update."
+            Write-Output $_.Exception.Message
+            return
+        }
+
+        $Updates = $SearchResult.Updates
+
+        # --------------------------------------------------
+        # No updates found
+        # --------------------------------------------------
+
+        if ($Updates.Count -eq 0) {
+            Write-Output ""
+            Write-Output "No additional Windows Updates are currently available."
+            Write-Output "Windows Update appears to be current."
+            break
+        }
+
+        Write-Output ""
+        Write-Output "Updates found: $($Updates.Count)"
+
+        foreach ($Update in $Updates) {
+            Write-Output "  - $($Update.Title)"
+        }
+
+        # --------------------------------------------------
+        # Download updates
+        # --------------------------------------------------
+
+        Write-Output ""
+        Write-Output "Starting Windows Update download..."
+
+        $Downloader = $Session.CreateUpdateDownloader()
+        $Downloader.Updates = $Updates
+
+        try {
+            $DownloadResult = $Downloader.Download()
+
+            Write-Output "Download operation completed."
+            Write-Output "Download result code: $($DownloadResult.ResultCode)"
+        }
+        catch {
+            Write-Output "WARNING: Some updates could not be downloaded."
+            Write-Output $_.Exception.Message
+        }
+
+        # --------------------------------------------------
+        # Re-query updates after download
+        # --------------------------------------------------
+
+        Write-Output ""
+        Write-Output "Preparing updates for installation..."
+
+        try {
+            $SearchResult = $Searcher.Search(
+                "IsInstalled=0 and IsHidden=0 and Type='Software'"
+            )
+
+            $Updates = $SearchResult.Updates
+        }
+        catch {
+            Write-Output "WARNING: Unable to refresh update list."
+        }
+
+        # --------------------------------------------------
+        # Install updates
+        # --------------------------------------------------
+
+        if ($Updates.Count -gt 0) {
+
+            Write-Output "Installing $($Updates.Count) update(s)..."
+
+            $Installer = $Session.CreateUpdateInstaller()
+            $Installer.Updates = $Updates
+
+            try {
+                $InstallResult = $Installer.Install()
+
+                Write-Output "Installation operation completed."
+                Write-Output "Installation result code: $($InstallResult.ResultCode)"
+
+                if ($InstallResult.RebootRequired) {
+                    Write-Output ""
+                    Write-Output "========================================"
+                    Write-Output " REBOOT REQUIRED"
+                    Write-Output "========================================"
+                    Write-Output "Windows Update requires a reboot."
+                    Write-Output "The computer should be rebooted before"
+                    Write-Output "continuing the preparation process."
+                    Write-Output ""
+
+                    return
+                }
+            }
+            catch {
+                Write-Output "WARNING: Update installation encountered an error."
+                Write-Output $_.Exception.Message
+            }
+        }
+
+        # --------------------------------------------------
+        # Give Windows Update time to finish
+        # --------------------------------------------------
+
+        Write-Output ""
+        Write-Output "Allowing Windows Update to finish processing..."
+        Start-Sleep -Seconds 15
+
+        # Loop back and check for additional updates
+    }
+
+    # --------------------------------------------------
+    # Final status
+    # --------------------------------------------------
+
+    Write-Output ""
+    Write-Output "========================================"
+
+    if ($Cycle -ge $MaxCycles) {
+        Write-Output "Maximum update cycles reached."
+        Write-Output "Run Windows Update again after reboot if necessary."
+    }
+    else {
+        Write-Output "Windows Update preparation complete."
+        Write-Output "No additional updates were detected."
+    }
+
+    Write-Output "========================================"
+    Write-Output ""
+}
+
+# Main script execution
+Assert-Admin
+windowsUpdate
+installApps
+Remove-Bloatware
+setPowerPlan
+Disable-StartupApps 
+Reset-TaskbarPins
+setTimeZone
+cleanRestore
+InstallAgents
+installOffice  
+
+Write-Warning "Windows Updates may require a reboot to complete.`n`n"
+
+exit $global:ExitCode
