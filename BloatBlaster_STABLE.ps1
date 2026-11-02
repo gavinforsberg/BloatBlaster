@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 
 [CmdletBinding()]
 param (
@@ -26,6 +26,95 @@ function Assert-Admin
         exit 1
     }
 }
+
+# Bootstrap before Windows Update or software installation. This uses Microsoft's
+# supported repair cmdlet to deploy the latest stable App Installer/WinGet and
+# its required dependencies, without deleting source databases or app data.
+# https://learn.microsoft.com/windows/package-manager/winget/
+function Initialize-WinGet {
+    Assert-Admin
+    Write-Host "`n--- Updating App Installer and checking WinGet prerequisites ---" -ForegroundColor Cyan
+    $previousTls = [Net.ServicePointManager]::SecurityProtocol
+    try {
+        if (-not [Environment]::Is64BitProcess) {
+            throw 'Run this script in 64-bit Windows PowerShell 5.1.'
+        }
+        if ([Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
+            throw 'Run provisioning as an elevated technician account; this interactive script requires a user session.'
+        }
+        [Net.ServicePointManager]::SecurityProtocol = $previousTls -bor [Net.SecurityProtocolType]::Tls12
+        $before = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction Stop
+        if ($before) { Write-Host "  App Installer before: $($before.Version)" }
+        else { Write-Host '  App Installer is missing for this account; installing it.' }
+
+        Write-Host '  Checking PowerShell Gallery and NuGet prerequisites ...'
+        if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue |
+            Where-Object { [version]$_.Version -ge [version]'2.8.5.201' })) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force -ErrorAction Stop | Out-Null
+        }
+        $gallery = Get-PSRepository -Name PSGallery -ErrorAction Stop
+        if ($gallery.SourceLocation.TrimEnd('/') -ne 'https://www.powershellgallery.com/api/v2') {
+            throw 'PSGallery does not point to the official PowerShell Gallery.'
+        }
+        $latest = Find-Module -Name Microsoft.WinGet.Client -Repository PSGallery -ErrorAction Stop
+        $available = Get-Module -Name Microsoft.WinGet.Client -ListAvailable |
+            Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $available -or $available.Version -lt [version]$latest.Version) {
+            Write-Host "  Installing Microsoft.WinGet.Client $($latest.Version) ..."
+            Install-Module -Name Microsoft.WinGet.Client -RequiredVersion $latest.Version -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        }
+        Import-Module Microsoft.WinGet.Client -MinimumVersion $latest.Version -Force -ErrorAction Stop
+        Write-Host '  Installing/repairing the latest stable App Installer and required dependencies ...'
+        $repairResult = @(Repair-WinGetPackageManager -AllUsers -Latest -Force -ErrorAction Stop)
+        $repairResult | Out-Host
+        foreach ($result in $repairResult) {
+            if (($result -is [int] -or $result -is [long]) -and $result -ne 0) {
+                throw "App Installer repair returned exit code $result."
+            }
+        }
+
+        $package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction Stop |
+            Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $package -or $package.Status -ne 'Ok') {
+            throw 'App Installer is not registered in a healthy state for the current account.'
+        }
+        Write-Host "  App Installer after: $($package.Version)" -ForegroundColor Green
+        foreach ($dependency in $package.Dependencies) {
+            Write-Host "  Dependency: $($dependency.Name) $($dependency.Version) [$($dependency.Status)]"
+            if ($dependency.Status -ne 'Ok') { throw "Dependency is unhealthy: $($dependency.Name)" }
+        }
+        # Resolve the registered package directly: no reliance on a stale PATH or alias.
+        $script:WinGetPath = Join-Path $package.InstallLocation 'winget.exe'
+        if (-not (Test-Path -LiteralPath $script:WinGetPath -PathType Leaf)) {
+            throw 'The registered App Installer package does not contain winget.exe.'
+        }
+        Invoke-WinGetPreflightCommand -Arguments @('--version')
+        Invoke-WinGetPreflightCommand -Arguments @('--info')
+        Invoke-WinGetPreflightCommand -Arguments @('source', 'update', '--name', 'winget', '--disable-interactivity')
+        # A real repository query verifies more than just launching the executable.
+        Invoke-WinGetPreflightCommand -Arguments @('show', '--id', 'Microsoft.PowerShell', '--exact', '--source', 'winget', '--accept-source-agreements', '--disable-interactivity')
+        Write-Host '  WinGet executable and community source verified.' -ForegroundColor Green
+    }
+    finally {
+        [Net.ServicePointManager]::SecurityProtocol = $previousTls
+    }
+}
+
+function Invoke-WinGetPreflightCommand {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    Write-Host "  Verifying: winget $($Arguments -join ' ')" -ForegroundColor Cyan
+    & $script:WinGetPath @Arguments | Out-Host
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { throw "WinGet check failed (exit $code): $($Arguments -join ' ')" }
+}
+
+# All existing install/list/upgrade calls use the exact executable verified above.
+function winget {
+    if (-not $script:WinGetPath) { throw 'WinGet startup verification has not completed.' }
+    & $script:WinGetPath @args
+    $global:LASTEXITCODE = $LASTEXITCODE
+}
+
 
 # Helper function to check if a winget package is installed
 function Test-WingetInstalled {
@@ -56,28 +145,7 @@ function Show-OptionalMenu {
 # Function to install Firefox, Chrome, and Adobe Acrobat Reader using winget
 function installApps 
 {
-    Write-Host "`n--- FULL WINGET SOURCE RESET ---" -ForegroundColor Cyan
-
-    # Stop anything possibly locking the database
-    taskkill /IM WinGet.exe /F 2>$null
-    taskkill /IM AppInstaller.exe /F 2>$null
-
-    # Remove corrupted WinGet database + indexes
-    Remove-Item "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\*" -Recurse -Force -ErrorAction SilentlyContinue
-    # Remove legacy WinGet sqlite DB (causes 100% of hash mismatch cases)
-    Remove-Item "$env:LOCALAPPDATA\Microsoft\WinGet" -Recurse -Force -ErrorAction SilentlyContinue
-
-    # Re-register App Installer (repairs WinGet integration)
-    Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\AppxManifest.xml" -DisableDevelopmentMode -ErrorAction SilentlyContinue
-    # Re-register Winget package:
-    Add-AppxPackage -Register "C:\Program Files\WindowsApps\Microsoft.Winget.Source_*\AppXManifest.xml" -DisableDevelopmentMode
-    
-
-    # Reset winget sources
-    winget source reset --force
-    winget source update
-
-    Write-Host "--- Winget source reset complete ---`n" -ForegroundColor Green
+    # WinGet and its dependencies were updated and verified during startup.
 
     # Install common applications using winget
     Write-Host "`nStarting software installations via winget..."
@@ -299,42 +367,202 @@ function installOffice
     Write-Host "`nOffice installation completed.`n"
 }
 
-# This doesn't seem to be doing anything when ran - NEEDS FIXING
-# Function to remove bloatware apps
-function Remove-Bloatware 
-{
-    foreach ($App in $AppList) 
-    {
-        $AppxPackage = Get-AppxPackage -AllUsers | Where-Object { $_.Name -Like "*$App*" } | Sort-Object Name -Unique
-        $Provisioned = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$App*" } | Sort-Object DisplayName -Unique
-
-        if (-not $AppxPackage -and -not $Provisioned) 
-        {
-            Write-Warning "$App is not installed."
-            continue
-        }
-
-        try 
-        {
-            if ($Provisioned) 
-            {
-                Write-Verbose "Removing provisioned package $($Provisioned.DisplayName)..."
-                $Provisioned | Remove-AppxProvisionedPackage -Online -AllUsers | Out-Null
+# Targeted MSP removal. Package manager owns WindowsApps and per-user package
+# data cleanup: never take ownership or recursively delete profile/app folders.
+# References: learn.microsoft.com/powershell/module/appx/remove-appxpackage
+# and learn.microsoft.com/powershell/module/dism/remove-appxprovisionedpackage
+function Remove-Bloatware {
+    Assert-Admin
+    Write-Host "`n--- Targeted application removal ---" -ForegroundColor Cyan
+    $targets = @(
+        'Microsoft.Copilot', 'Microsoft.BingNews', 'Microsoft.BingWeather',
+        'DropboxInc.Dropbox', 'DropboxInc.DropboxOEM',
+        'Microsoft.GamingApp', 'Microsoft.XboxApp', 'Microsoft.XboxGameOverlay',
+        'Microsoft.XboxGamingOverlay', 'Microsoft.XboxSpeechToTextOverlay',
+        'Microsoft.Xbox.TCUI', 'Microsoft.XboxIdentityProvider'
+    )
+    # Preserve custom lists; custom field is a NinjaOne field NAME, not code.
+    $configured = $AppsToRemove
+    if (-not [string]::IsNullOrWhiteSpace($OverrideWithCustomField)) {
+        try {
+            if (-not (Get-Command Ninja-Property-Get -ErrorAction SilentlyContinue)) {
+                throw 'Ninja-Property-Get is unavailable; cannot read the override field.'
             }
-            if ($AppxPackage) 
-            {
-                Write-Verbose "Removing app package $($AppxPackage.Name)..."
-                $AppxPackage | Remove-AppxPackage -AllUsers | Out-Null
-            }
-            Write-Host "Removed: $App"
+            $value = Ninja-Property-Get $OverrideWithCustomField -ErrorAction Stop
+            if ([string]::IsNullOrWhiteSpace([string]$value)) { throw 'Override field is empty.' }
+            $configured = [string]$value
         }
-        catch 
-        {
-            Write-Error "Failed to remove ${App}: $($_.Exception.Message)"
+        catch {
+            Write-Warning "Custom field failed; retaining supplied app list: $($_.Exception.Message)"
             $global:ExitCode = 1
         }
     }
+    foreach ($name in ($configured -split ',')) {
+        $name = $name.Trim()
+        if (-not $name) { continue }
+        # No wildcards or partial package-name matching.
+        if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]+$') {
+            Write-Warning "Rejected nonliteral package name: $name"
+            $global:ExitCode = 1
+            continue
+        }
+        $targets += $name
+    }
+    $results = @()
+    foreach ($name in ($targets | Sort-Object -Unique)) {
+        Write-Host "`nChecking $name ..." -ForegroundColor Cyan
+        try {
+            $installed = @(Get-AppxPackage -AllUsers -PackageTypeFilter Main,Bundle -ErrorAction Stop |
+                Where-Object { $_.Name -eq $name })
+            $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop |
+                Where-Object { $_.DisplayName -eq $name })
+            if ($installed.Count -eq 0 -and $provisioned.Count -eq 0) {
+                Write-Host '  Not present.' -ForegroundColor DarkGray
+                $results += [pscustomobject]@{ App = $name; Status = 'Not present' }
+                continue
+            }
+            $failed = $false
+            foreach ($package in $provisioned) {
+                try {
+                    Write-Host "  Removing provisioning: $($package.PackageName)"
+                    $result = Remove-AppxProvisionedPackage -Online -AllUsers -PackageName $package.PackageName -ErrorAction Stop
+                    if ($result.RestartNeeded) { Write-Warning '  Reboot required to finish removal.' }
+                }
+                catch {
+                    $failed = $true
+                    Write-Warning "  Provisioning removal failed: $($_.Exception.Message)"
+                }
+            }
+            # Bundles must be removed via their parent, not each child resource.
+            $bundles = @($installed | Where-Object { $_.IsBundle })
+            if ($bundles.Count -gt 0) { $installed = $bundles }
+            foreach ($package in ($installed | Sort-Object PackageFullName -Unique)) {
+                try {
+                    if ($package.NonRemovable -or $package.IsFramework) {
+                        throw 'Windows marks this package protected or shared; leaving it intact.'
+                    }
+                    Write-Host "  Removing for all users: $($package.PackageFullName)"
+                    Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+                }
+                catch {
+                    $failed = $true
+                    Write-Warning "  Installed-package removal failed: $($_.Exception.Message)"
+                }
+            }
+            $remaining = @(Get-AppxPackage -AllUsers -PackageTypeFilter Main,Bundle -ErrorAction Stop |
+                Where-Object { $_.Name -eq $name })
+            $remainingProvisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop |
+                Where-Object { $_.DisplayName -eq $name })
+            if ($remaining.Count -gt 0 -or $remainingProvisioned.Count -gt 0) { $failed = $true }
+            if ($failed) {
+                $global:ExitCode = 1
+                Write-Warning "  $name needs review; removal is incomplete or returned errors. Reboot and rerun if in use."
+                $status = 'Needs review'
+            }
+            else {
+                Write-Host '  Removal verified. Windows manages package-file cleanup.' -ForegroundColor Green
+                $status = 'Removed and verified'
+            }
+            $results += [pscustomobject]@{ App = $name; Status = $status }
+        }
+        catch {
+            $global:ExitCode = 1
+            Write-Warning "  Detection/verification failed for ${name}: $($_.Exception.Message)"
+            $results += [pscustomobject]@{ App = $name; Status = 'Detection/verification failed' }
+        }
+    }
+    Remove-DropboxPromotion
+    Write-Host "`nApplication removal summary" -ForegroundColor Cyan
+    $results | Format-Table -AutoSize | Out-Host
+    Write-Host 'Shared Gaming Services, Widgets/Web Experience, Office Copilot, Dropbox sync data and browser profiles are preserved.'
 }
+
+function Remove-DropboxPromotion {
+    Write-Host "`nChecking native Dropbox promotions ..." -ForegroundColor Cyan
+    # Avoid Win32_Product, which can trigger MSI repair across unrelated apps.
+    $keys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    $found = $false
+    foreach ($key in $keys) {
+        if (-not (Test-Path -LiteralPath $key)) { continue }
+        try {
+            $entries = @(Get-ChildItem -LiteralPath $key -ErrorAction Stop | Get-ItemProperty -ErrorAction Stop |
+                Where-Object { $_.DisplayName -in @('Dropbox Promotion', 'Dropbox OEM', 'Dropbox 25 GB', 'Get Dropbox') })
+            foreach ($entry in $entries) {
+                $found = $true
+                try {
+                    Write-Host "  Found: $($entry.DisplayName)"
+                    # Only execute a recognized MSI uninstall; never evaluate arbitrary registry commands.
+                    if ($entry.WindowsInstaller -eq 1 -and $entry.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$') {
+                        $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList @('/x', $entry.PSChildName, '/qn', '/norestart') -Wait -PassThru -ErrorAction Stop
+                        if ($process.ExitCode -notin @(0, 1605, 1614, 3010)) { throw "MSI exit code $($process.ExitCode)" }
+                        if ($process.ExitCode -eq 3010) { Write-Warning '  Promotion removal requires reboot.' }
+                        if (Test-Path -LiteralPath $entry.PSPath) { throw 'Promotion registration remains; review after reboot.' }
+                        Write-Host '  Native promotion removal verified.' -ForegroundColor Green
+                    }
+                    elseif ($entry.UninstallString -match '^"([^"\r\n]+\\DropboxOEM\.exe)"\s+/(?:uninstall|remove)\s*$') {
+                        $exe = $Matches[1]
+                        $argument = ($entry.UninstallString -replace '^"[^"\r\n]+"\s+', '')
+                        if (-not [IO.Path]::IsPathRooted($exe) -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+                            throw 'OEM uninstaller path is unavailable.'
+                        }
+                        $signature = Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
+                        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O="?Dropbox(?:,? Inc\.?)?"?(?:,|$)') {
+                            throw 'OEM uninstaller does not have a valid Dropbox publisher signature.'
+                        }
+                        $process = Start-Process -FilePath $exe -ArgumentList $argument -Wait -PassThru -ErrorAction Stop
+                        if ($process.ExitCode -notin @(0, 3010)) { throw "OEM exit code $($process.ExitCode)" }
+                        if ($process.ExitCode -eq 3010) { Write-Warning '  OEM removal requires reboot.' }
+                        if (Test-Path -LiteralPath $entry.PSPath) { throw 'OEM registration remains; review after reboot.' }
+                        Write-Host '  Native OEM promotion removal verified.' -ForegroundColor Green
+                    }
+                    else {
+                        throw 'Unrecognized OEM uninstaller; remove this promotion through Installed apps. No arbitrary uninstall command was executed.'
+                    }
+                }
+                catch {
+                    $global:ExitCode = 1
+                    Write-Warning "  $($entry.DisplayName): $($_.Exception.Message)"
+                }
+            }
+        }
+        catch {
+            $global:ExitCode = 1
+            Write-Warning "  Could not inspect ${key}: $($_.Exception.Message)"
+        }
+    }
+    if (-not $found) { Write-Host '  No registered native promotion found in machine/current-user scope.' -ForegroundColor DarkGray }
+    # Only exact promotional link names; never delete a Dropbox folder or sync shortcut.
+    $roots = @("$env:PUBLIC\Desktop", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
+        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs", [Environment]::GetFolderPath('Desktop'))
+    foreach ($root in ($roots | Select-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        foreach ($leaf in @('Dropbox 25 GB.lnk', 'Get Dropbox.lnk', 'Dropbox Promotion.lnk')) {
+            $path = Join-Path $root $leaf
+            if (-not (Test-Path -LiteralPath $path)) { continue }
+            try {
+                $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse point skipped.' }
+                $shell = New-Object -ComObject WScript.Shell
+                $link = $shell.CreateShortcut($path)
+                if ([IO.Path]::GetFileName($link.TargetPath) -ne 'DropboxOEM.exe') {
+                    Write-Warning "  Unconfirmed promotional shortcut preserved: $path"
+                    continue
+                }
+                Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                Write-Host "  Removed OEM promotional shortcut: $path" -ForegroundColor Green
+            }
+            catch {
+                $global:ExitCode = 1
+                Write-Warning "  Shortcut cleanup failed for ${path}: $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
 
 # Function to reset taskbar pins to only File Explorer and Firefox
 function Reset-TaskbarPins 
@@ -1061,6 +1289,14 @@ function windowsUpdate
 
 # Main script execution
 Assert-Admin
+try {
+    Initialize-WinGet
+}
+catch {
+    Write-Warning ("App Installer/WinGet startup check failed: {0}" -f $_.Exception.Message)
+    Write-Warning 'Provisioning stopped before updates or application changes. Check network access, policies and pending reboots, then rerun.'
+    exit 1
+}
 windowsUpdate
 installApps
 Remove-Bloatware
