@@ -93,6 +93,7 @@ $OptionalSoftware = @(
     @{ Name = 'CopyTrans';            Id = 'CopyTrans.Studio' }
     @{ Name = 'Creative Cloud';       Id = 'Adobe.CreativeCloud' }
     @{ Name = 'CrystalDiskInfo';      Id = 'CrystalDewWorld.CrystalDiskInfo.KureiKeiEdition' }
+    @{ Name = 'Dell Command Update';      Id = 'Dell.CommandUpdate' }
     @{ Name = 'Dropbox';              Id = 'Dropbox.Dropbox' }
     @{ Name = 'Eraser';               Id = 'Eraser.Eraser' }
     @{ Name = 'Git';                  Id = 'Git.Git' }
