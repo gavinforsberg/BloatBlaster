@@ -225,6 +225,7 @@ function Read-BloatBlasterScript {
     [pscustomobject]@{
         Path             = $Path
         SupportsGui      = $params.ContainsKey('Unattended') -and $params.ContainsKey('SkipStep')
+        SupportsSac      = $params.ContainsKey('DisableSmartAppControl')
         Required         = @(& $getHashtables 'RequiredApps')
         Optional         = @(& $getHashtables 'OptionalSoftware')
         Bloatware        = $bloat
@@ -255,6 +256,7 @@ $StepDefs = @(
     @{ Key = 'WinGet';        Name = 'WinGet';          Section = 'Updating App Installer and verifying WinGet'; Box = 'StepWinGet' }
     @{ Key = 'WindowsUpdate'; Name = 'Windows Update';  Section = 'Windows Update';                Box = 'StepWindowsUpdate' }
     @{ Key = 'Bloatware';     Name = 'Bloatware';       Section = 'Targeted application removal'; Box = 'StepBloatware' }
+    @{ Key = 'SmartAppControl'; Name = 'Smart App Control'; Section = 'Smart App Control';         Box = 'OptSmartApp' }
     @{ Key = 'Apps';          Name = 'Apps';            Section = 'Application installs*';        Box = 'StepApps' }
     @{ Key = 'Power';         Name = 'Power';           Section = 'Power settings';                Box = 'StepPower' }
     @{ Key = 'Startup';       Name = 'Startup apps';    Section = 'Disabling startup apps*';      Box = 'StepStartup' }
@@ -452,6 +454,10 @@ $SkippableSteps = 'WinGet', 'WindowsUpdate', 'Bloatware', 'Apps', 'Power', 'Star
                 <CheckBox x:Name="OptOffice" Style="{StaticResource StepBox}">
                   <StackPanel Margin="4,0,0,0"><TextBlock Text="Install Microsoft 365" FontWeight="SemiBold"/>
                     <TextBlock x:Name="OfficeHint" Style="{StaticResource Hint}" Text="Office Deployment Tool from the Paths tab."/></StackPanel>
+                </CheckBox>
+                <CheckBox x:Name="OptSmartApp" Style="{StaticResource StepBox}">
+                  <StackPanel Margin="4,0,0,0"><TextBlock Text="Turn off Smart App Control" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="SacHint" Style="{StaticResource Hint}" Text="Checking..."/></StackPanel>
                 </CheckBox>
 
                 <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
@@ -702,6 +708,40 @@ function Update-Summary {
     $ui.RunBtn.IsEnabled = (-not $state.Running) -and $isAdmin -and $state.Script -and $state.Script.SupportsGui -and $steps.Count -gt 0
 }
 
+# Same logic as Get-SmartAppControlState in the script: On, Evaluation, Off or NotAvailable
+function Get-SmartAppControlState {
+    try {
+        switch ((Get-MpComputerStatus -ErrorAction Stop).SmartAppControlState) {
+            'On'   { return 'On' }
+            'Eval' { return 'Evaluation' }
+            'Off'  { return 'Off' }
+        }
+    }
+    catch { }
+    $value = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name 'VerifiedAndReputablePolicyState' -ErrorAction SilentlyContinue).VerifiedAndReputablePolicyState
+    switch ($value) { 0 { 'Off' } 1 { 'On' } 2 { 'Evaluation' } default { 'NotAvailable' } }
+}
+
+# Enables the Smart App Control option only when this PC has it on and the script supports it
+function Update-SacOption {
+    if (-not $state.SacState) { $state.SacState = Get-SmartAppControlState }
+    $sac = $state.SacState
+    $box = $ui.OptSmartApp
+
+    if (-not ($state.Script -and $state.Script.SupportsSac)) {
+        $box.IsChecked = $false; $box.IsEnabled = $false
+        $ui.SacHint.Text = "This version of the script doesn't support it."
+    }
+    elseif ($sac -in 'On', 'Evaluation') {
+        $box.IsEnabled = $true
+        $ui.SacHint.Text = "Currently '$sac' on this PC. Can block some installers. Usually can't be turned back on without reinstalling Windows."
+    }
+    else {
+        $box.IsChecked = $false; $box.IsEnabled = $false
+        $ui.SacHint.Text = if ($sac -eq 'Off') { 'Already off on this PC.' } else { 'Not available on this PC.' }
+    }
+}
+
 # Rebuilds the step chips as "pending" from the current checkboxes (not during or right after a run)
 function Reset-StepChips {
     if ($state.Running) { return }
@@ -796,6 +836,7 @@ function Import-ScriptInfo {
     }
     else { Show-Banner $null }
 
+    Update-SacOption
     Update-PathStatus
     Update-StepSelection
 }
@@ -972,6 +1013,7 @@ function Start-Setup {
            "Bloatware to remove: $($bloat.Count) app(s)`n`n"
     if ((Get-StepEnabled 'Office') -and $ui.OfficeStatus.Text -like "$([char]0x26A0)*") { $msg += "Note: Microsoft 365 files are missing, so that step will fail.`n" }
     if ((Get-StepEnabled 'Taskbar')) { $msg += "Note: Explorer will restart to reset the taskbar.`n" }
+    if ((Get-StepEnabled 'SmartAppControl')) { $msg += "Note: Smart App Control will be turned off. It usually can't be turned back on without reinstalling Windows.`n" }
     $msg += "`nThis changes system settings and can take an hour or more."
     if (-not (Confirm-Action $msg 'Run setup?' 'Question')) { return }
 
@@ -991,6 +1033,7 @@ function Start-Setup {
     if (Get-StepEnabled 'Taskbar')    { $parts += '-ResetTaskbar' }
     if (Get-StepEnabled 'TimeZone')   { $parts += '-SetTimeZone' }
     if (Get-StepEnabled 'Office')     { $parts += '-InstallOffice' }
+    if (Get-StepEnabled 'SmartAppControl') { $parts += '-DisableSmartAppControl' }
 
     $launcher = Join-Path $env:TEMP ("BloatBlaster_GUI_{0:yyyyMMdd_HHmmss}.ps1" -f (Get-Date))
     $body = @(

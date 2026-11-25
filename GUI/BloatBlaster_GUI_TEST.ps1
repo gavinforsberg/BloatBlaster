@@ -77,6 +77,10 @@ param (
     [switch]$SetTimeZone,
     [switch]$InstallOffice,
 
+    # Turns Smart App Control off (Windows 11). On most builds it cannot be turned
+    # back on without reinstalling or resetting Windows.
+    [switch]$DisableSmartAppControl,
+
     # Steps to skip. Works with or without -Unattended.
     [ValidateSet('WinGet', 'WindowsUpdate', 'Bloatware', 'Apps', 'Power', 'Startup', 'DiskCleanup', 'RestorePoint', 'Agents')]
     [string[]]$SkipStep = @()
@@ -919,6 +923,67 @@ function Set-CentralTimeZone {
 
 #endregion
 
+#region ---------- Smart App Control ----------
+
+# Returns On, Evaluation, Off or NotAvailable (older Windows / no Smart App Control)
+function Get-SmartAppControlState {
+    try {
+        $mp = (Get-MpComputerStatus -ErrorAction Stop).SmartAppControlState
+        switch ($mp) {
+            'On'   { return 'On' }
+            'Eval' { return 'Evaluation' }
+            'Off'  { return 'Off' }
+        }
+    }
+    catch { }   # Defender cmdlets missing or another AV is primary; fall back to the registry
+
+    $value = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name 'VerifiedAndReputablePolicyState' -ErrorAction SilentlyContinue).VerifiedAndReputablePolicyState
+    switch ($value) {
+        0       { 'Off' }
+        1       { 'On' }
+        2       { 'Evaluation' }
+        default { 'NotAvailable' }
+    }
+}
+
+# Turns Smart App Control off. SAC blocks many unsigned or less common installers
+# (e.g. some admin tools and line-of-business apps).
+function Disable-SmartAppControl {
+    Write-Section 'Smart App Control'
+
+    $before = Get-SmartAppControlState
+    Write-Host "  Current state: $before"
+    if ($before -eq 'NotAvailable') { Write-Host '  Smart App Control is not available on this device. Nothing to do.' -ForegroundColor DarkGray; return }
+    if ($before -eq 'Off')          { Write-Host '  Smart App Control is already off.' -ForegroundColor DarkGray; return }
+
+    try {
+        Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name 'VerifiedAndReputablePolicyState' -Value 0
+    }
+    catch {
+        Set-Failure "Could not turn off Smart App Control: $($_.Exception.Message)"
+        return
+    }
+
+    # Apply the policy change now; otherwise it applies at the next restart
+    $ciTool = Join-Path $env:SystemRoot 'System32\CiTool.exe'
+    $applied = $false
+    if (Test-Path -LiteralPath $ciTool -PathType Leaf) {
+        & $ciTool --refresh | Out-Host
+        $applied = ($LASTEXITCODE -eq 0)
+        if (-not $applied) { Write-Warning "  CiTool refresh returned exit code $LASTEXITCODE." }
+    }
+    if (-not $applied) {
+        $script:RebootRequired = $true
+        Write-Warning '  Smart App Control will be fully off after a restart.'
+    }
+
+    $after = Get-SmartAppControlState
+    if ($after -eq 'Off') { Write-Host '  Smart App Control turned off.' -ForegroundColor Green }
+    else                  { Write-Host "  Smart App Control set to off (reports '$after' until the policy refreshes or the PC restarts)." -ForegroundColor Yellow }
+}
+
+#endregion
+
 #region ---------- Disk Cleanup / restore point ----------
 
 function Invoke-DiskCleanup {
@@ -1123,6 +1188,7 @@ try {
         $doTaskbar  = [bool]$ResetTaskbar
         $doTimeZone = [bool]$SetTimeZone
         $doOffice   = [bool]$InstallOffice
+        $doSac      = [bool]$DisableSmartAppControl
     }
     else {
         # Ask everything up front so the rest runs unattended
@@ -1131,18 +1197,28 @@ try {
         $doTaskbar        = Read-YesNo "`nReset the taskbar pins?"
         $doTimeZone       = Read-YesNo 'Set the time zone to Central Standard Time?'
         $doOffice         = Read-YesNo 'Install Microsoft 365?'
+
+        # Only ask when Smart App Control is actually on (or evaluating)
+        $doSac   = [bool]$DisableSmartAppControl
+        $sacNow  = Get-SmartAppControlState
+        if (-not $doSac -and $sacNow -in 'On', 'Evaluation') {
+            $doSac = Read-YesNo "Smart App Control is '$sacNow'. Turn it off? (It usually can't be turned back on without reinstalling Windows.)"
+        }
     }
 
     Write-Host "`nOptional apps:  $(if ($selectedOptional.Count) { ($selectedOptional | ForEach-Object { $_.Name }) -join ', ' } else { 'None' })"
     Write-Host "Reset taskbar:  $doTaskbar"
     Write-Host "Set time zone:  $doTimeZone"
     Write-Host "Install M365:   $doOffice"
+    Write-Host "Disable SAC:    $doSac"
     if ($SkipStep.Count) { Write-Host "Skipping:       $($SkipStep -join ', ')" }
     Write-Host "`nAll questions answered. The rest of setup runs unattended." -ForegroundColor Green
 
     if ('WinGet'        -notin $SkipStep) { [void](Initialize-WinGet) }
     if ('WindowsUpdate' -notin $SkipStep) { Invoke-WindowsUpdate -MaxCycles $MaxUpdateCycles }
     if ('Bloatware'     -notin $SkipStep) { Remove-Bloatware -Apps $AppsToRemove }
+    # Before app installs, since Smart App Control can block some installers
+    if ($doSac) { Disable-SmartAppControl } else { Write-Host "`nSmart App Control not changed." }
     if ('Apps'          -notin $SkipStep) { Install-Application -Required $RequiredApps -Optional $selectedOptional }
     if ('Power'         -notin $SkipStep) { Set-PowerSetting }
     if ('Startup'       -notin $SkipStep) { Disable-StartupApp }
